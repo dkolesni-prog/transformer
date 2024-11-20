@@ -24,7 +24,7 @@ func firstEndpoint(w http.ResponseWriter,
 	keyShortValueLong[hashStr] = string(body)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(201)
-	w.Write([]byte("http://localhost:8080/" + hashStr + "\n"))
+	w.Write([]byte("http://localhost:8080/" + hashStr))
 }
 
 func secondEndpoint(w http.ResponseWriter,
