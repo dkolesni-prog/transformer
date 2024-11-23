@@ -37,7 +37,7 @@ func secondEndpoint(w http.ResponseWriter,
 
 	long, exists := keyShortValueLong[id]
 	if !exists {
-		http.Error(w, "Short URL not found", http.StatusBadRequest)
+		http.Error(w, "Short URL not found", http.StatusTemporaryRedirect)
 		return
 	}
 	http.Redirect(w, r, long, http.StatusFound)
