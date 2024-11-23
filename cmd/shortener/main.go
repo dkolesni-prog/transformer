@@ -3,9 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	_ "fmt"
 	"github.com/go-chi/chi/v5"
-	_ "github.com/go-chi/chi/v5"
 	"io"
 	"net/http"
 )
