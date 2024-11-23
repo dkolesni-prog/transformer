@@ -3,6 +3,9 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	_ "fmt"
+	"github.com/go-chi/chi/v5"
+	_ "github.com/go-chi/chi/v5"
 	"io"
 	"net/http"
 )
@@ -18,6 +21,7 @@ func firstEndpoint(w http.ResponseWriter,
 		return
 	}
 	defer r.Body.Close()
+
 	hash := sha256.Sum256(body)
 	hashStr := hex.EncodeToString(hash[:])[:8]
 	keyLongValueShort[string(body)] = hashStr
@@ -31,15 +35,14 @@ func secondEndpoint(w http.ResponseWriter,
 	r *http.Request,
 	keyShortValueLong map[string]string) {
 
-	id := r.URL.Path[1:]
+	id := chi.URLParam(r, "id")
 
 	long, exists := keyShortValueLong[id]
 	if !exists {
 		http.Error(w, "Short URL not found", http.StatusBadRequest)
 		return
 	}
-	w.Header().Set("Location", long)
-	w.WriteHeader(http.StatusTemporaryRedirect)
+	http.Redirect(w, r, long, http.StatusFound)
 }
 
 func main() {
@@ -54,17 +57,15 @@ func run() error {
 	var keyLongValueShort = map[string]string{}
 	var keyShortValueLong = map[string]string{}
 
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost && r.URL.Path == "/" {
-			firstEndpoint(w, r, keyLongValueShort, keyShortValueLong)
-		} else if r.Method == http.MethodGet && len(r.URL.Path) > 1 {
-			secondEndpoint(w, r, keyShortValueLong)
-		} else {
-			w.WriteHeader(http.StatusBadRequest)
-		}
+	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
+		firstEndpoint(w, r, keyLongValueShort, keyShortValueLong)
 	})
 
-	return http.ListenAndServe(":8080", mux)
+	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
+		secondEndpoint(w, r, keyShortValueLong)
+	})
+
+	return http.ListenAndServe(":8080", r)
 }
