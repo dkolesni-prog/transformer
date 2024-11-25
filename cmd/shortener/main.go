@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"github.com/go-chi/chi/v5"
 	"io"
 	"net/http"
@@ -11,7 +12,8 @@ import (
 func firstEndpoint(w http.ResponseWriter,
 	r *http.Request,
 	keyLongValueShort map[string]string,
-	keyShortValueLong map[string]string) {
+	keyShortValueLong map[string]string,
+	cfg *Config) {
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -26,7 +28,7 @@ func firstEndpoint(w http.ResponseWriter,
 	keyShortValueLong[hashStr] = string(body)
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(201)
-	w.Write([]byte("http://localhost:8080/" + hashStr))
+	w.Write([]byte(cfg.BaseURL + hashStr))
 }
 
 func secondEndpoint(w http.ResponseWriter,
@@ -45,12 +47,13 @@ func secondEndpoint(w http.ResponseWriter,
 
 func main() {
 
-	if err := run(); err != nil {
+	cfg := NewConfig()
+	if err := run(cfg); err != nil {
 		panic(err)
 	}
 }
 
-func run() error {
+func run(cfg *Config) error {
 
 	var keyLongValueShort = map[string]string{}
 	var keyShortValueLong = map[string]string{}
@@ -58,12 +61,13 @@ func run() error {
 	r := chi.NewRouter()
 
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-		firstEndpoint(w, r, keyLongValueShort, keyShortValueLong)
+		firstEndpoint(w, r, keyLongValueShort, keyShortValueLong, cfg)
 	})
 
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 		secondEndpoint(w, r, keyShortValueLong)
 	})
 
-	return http.ListenAndServe(":8080", r)
+	fmt.Println("Running server on", cfg.RunAddr)
+	return http.ListenAndServe(cfg.RunAddr, r)
 }
