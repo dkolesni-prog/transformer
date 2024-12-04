@@ -1,87 +1,43 @@
+// cmd/shortener/main.go
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"github.com/go-chi/chi/v5"
-	"io"
+	"log"
 	"net/http"
+
+	"github.com/dkolesni-prog/transformer/internal/app"
+	"github.com/go-chi/chi/v5"
 )
 
-func firstEndpoint(w http.ResponseWriter,
-	r *http.Request,
-	keyLongValueShort map[string]string,
-	keyShortValueLong map[string]string,
-	cfg *Config) {
-
-	body, err := io.ReadAll(r.Body)
-	if err != nil {
-		http.Error(w, "Unable to read body", http.StatusBadRequest)
-		return
-	}
-	defer r.Body.Close()
-
-	hash := sha256.Sum256(body)
-	hashStr := hex.EncodeToString(hash[:])[:8]
-	keyLongValueShort[string(body)] = hashStr
-	keyShortValueLong[hashStr] = string(body)
-	baseURL := cfg.BaseURL
-	if baseURL[len(cfg.BaseURL)-1] != '/' {
-		baseURL += "/"
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(201)
-	w.Write([]byte(baseURL + hashStr))
-}
-
-func secondEndpoint(w http.ResponseWriter,
-	r *http.Request,
-	keyShortValueLong map[string]string) {
-
-	id := chi.URLParam(r, "id")
-
-	long, exists := keyShortValueLong[id]
-	if !exists {
-		http.Error(w, "Short URL not found", http.StatusNotFound)
-		return
-	}
-	http.Redirect(w, r, long, http.StatusTemporaryRedirect)
-}
+var Version string = "iter5"
 
 func main() {
 
-	cfg := NewConfig()
-	if err := run(cfg); err != nil {
-		panic(err)
+	if err := run(); err != nil {
+		log.Fatalf("Failed to run server: %v", err)
 	}
 }
 
-//Добавьте возможность конфигурировать сервис с помощью переменных окружения:
-//Адрес запуска HTTP-сервера — с помощью переменной SERVER_ADDRESS.
-//Базовый адрес результирующего сокращённого URL — с помощью переменной BASE_URL.
-//Приоритет параметров сервера должен быть таким:
-
-//Если указана переменная окружения, то используется она.
-//Если нет переменной окружения, но есть аргумент командной строки (флаг), то используется он.
-
-//Если нет ни переменной окружения, ни флага, то используется значение по умолчанию.
-
-func run(cfg *Config) error {
-
-	var keyLongValueShort = map[string]string{}
-	var keyShortValueLong = map[string]string{}
+// run sets up the router and starts the HTTP server.
+func run() error {
+	cfg := app.NewConfig()
+	storage := app.NewStorage()
 
 	r := chi.NewRouter()
 
+	// Register endpoints
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-		firstEndpoint(w, r, keyLongValueShort, keyShortValueLong, cfg)
+		app.ShortenURL(w, r, storage, cfg.BaseURL)
+	})
+
+	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
+		app.GetVersion(w, r, Version)
 	})
 
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-		secondEndpoint(w, r, keyShortValueLong)
+		app.GetFullURL(w, r, storage)
 	})
 
-	fmt.Println("Running server on", cfg.RunAddr)
+	log.Println("Running server on", cfg.RunAddr)
 	return http.ListenAndServe(cfg.RunAddr, r)
 }

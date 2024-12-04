@@ -2,12 +2,12 @@
 package main
 
 import (
+	"github.com/dkolesni-prog/transformer/internal/app"
+	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-
-	"github.com/go-chi/chi/v5"
 )
 
 func TestEndpoints(t *testing.T) {
@@ -61,15 +61,6 @@ func TestEndpoints(t *testing.T) {
 			wantCode: http.StatusNotFound,
 			wantBody: "Short URL not found\n",
 		},
-		//{
-		//	name:     "Invalid method",
-		//	method:   http.MethodPut,
-		//	url:      "/",
-		//	body:     "",
-		//	setup:    func(keyLongValueShort, keyShortValueLong map[string]string) {},
-		//	wantCode: http.StatusBadRequest,
-		//	wantBody: "",
-		//},
 	}
 
 	for _, tt := range tests {
@@ -93,11 +84,11 @@ func TestEndpoints(t *testing.T) {
 
 			// Определяем маршруты
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-				firstEndpoint(w, r, keyLongValueShort, keyShortValueLong, cfg)
+				app.ShortenURL(w, r, keyShortValueLong, cfg.BaseURL)
 			})
 
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-				secondEndpoint(w, r, keyShortValueLong)
+				app.GetFullURL(w, r, keyShortValueLong)
 			})
 
 			// Обрабатываем запрос
@@ -124,4 +115,5 @@ func TestEndpoints(t *testing.T) {
 			}
 		})
 	}
+	return
 }
