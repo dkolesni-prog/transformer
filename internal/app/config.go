@@ -1,4 +1,4 @@
-// internal/app/config.go
+// Internal/app/config.go.
 package app
 
 import (

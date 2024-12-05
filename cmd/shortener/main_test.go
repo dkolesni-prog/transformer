@@ -1,13 +1,14 @@
-// cmd/shortener/main_test.go
+// Cmd/shortener/main_test.go.
 package main
 
 import (
-	"github.com/dkolesni-prog/transformer/internal/app"
-	"github.com/go-chi/chi/v5"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/dkolesni-prog/transformer/internal/app"
+	"github.com/go-chi/chi/v5"
 )
 
 // TestEndpoints тестирует основные эндпоинты сервиса коротких URL.
@@ -76,7 +77,7 @@ func TestEndpoints(t *testing.T) {
 			if tt.body != "" {
 				req = httptest.NewRequest(tt.method, tt.url, strings.NewReader(tt.body))
 			} else {
-				req = httptest.NewRequest(tt.method, tt.url, nil)
+				req = httptest.NewRequest(tt.method, tt.url, http.NoBody)
 			}
 			rec := httptest.NewRecorder()
 
