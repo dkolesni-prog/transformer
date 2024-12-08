@@ -46,7 +46,7 @@ func TestEndpoints(t *testing.T) {
 			url:    "/abcd1234",
 			body:   "",
 			setup: func(s *app.Storage) {
-				s.Set("abcd1234", "https://example.com")
+				s.SetIfAbsent("abcd1234", "https://example.com")
 			},
 			wantCode: http.StatusTemporaryRedirect,
 			wantBody: "",

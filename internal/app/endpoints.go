@@ -26,7 +26,7 @@ func RandStringRunes(n int) string {
 func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Unable to read body", http.StatusBadRequest)
+		log.Printf("unable to read body of request: %v", err)
 		return
 	}
 	defer func() {
@@ -37,33 +37,26 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 
 	const maxRetries = 5
 	var randVal string
-	var exists bool
 
 	const randValLength = 8
-	//nolint:intrange // Using a traditional for loop for fixed iteration count
-	for i := 0; i < maxRetries; i++ {
+	for i := range maxRetries {
 		randVal = RandStringRunes(randValLength)
-		_, exists = storage.Get(randVal)
-		if !exists {
-			break
-		}
-		if i == maxRetries-1 {
-			http.Error(w, "Could not generate unique URL, please try again", http.StatusInternalServerError)
+		success, shortURL := storage.SetIfAbsent(randVal, string(body))
+		if success {
+			baseURL = ensureTrailingSlash(baseURL)
+			w.Header().Set("Content-Type", "text/plain")
+			w.WriteHeader(http.StatusCreated)
+			_, err = w.Write([]byte(baseURL + shortURL))
+			if err != nil {
+				log.Printf("Error writing response: %v", err)
+			}
 			return
 		}
+		if i == maxRetries-1 {
+			log.Printf("Could not generate unique URL")
+		}
 	}
 
-	storage.Set(randVal, string(body))
-	baseURL = ensureTrailingSlash(baseURL)
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusCreated)
-
-	_, err = w.Write([]byte(baseURL + randVal))
-	if err != nil {
-		log.Printf("Error writing response: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-		return
-	}
 }
 
 func GetFullURL(w http.ResponseWriter, r *http.Request, storage *Storage) {
@@ -87,7 +80,6 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 	_, err := w.Write([]byte(version))
 	if err != nil {
 		log.Printf("Error writing version response: %v", err)
-		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 }
