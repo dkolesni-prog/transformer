@@ -16,15 +16,15 @@ func NewStorage() *Storage {
 	}
 }
 
-func (s *Storage) SetIfAbsent(short, long string) (bool, string) {
+func (s *Storage) SetIfAbsent(short, long string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.keyShortValuelong[short]; ok {
-		return false, ""
+		return "", false
 	}
 	s.keyShortValuelong[short] = long
-	return true, short
+	return short, true
 }
 
 func (s *Storage) Get(short string) (string, bool) {
