@@ -1,4 +1,4 @@
-// cmd/shortener/main_test.go
+// Cmd/shortener/main_test.go.
 package main
 
 import (
@@ -23,7 +23,7 @@ func TestEndpoints(t *testing.T) {
 
 	// Initialize configuration and storage
 	cfg := app.NewConfig()
-	storage := app.NewStorage()
+	storage := app.NewStorage(cfg.FileStoragePath)
 
 	tests := []struct {
 		name        string
@@ -197,7 +197,7 @@ func TestGzipCompression(t *testing.T) {
 	// 1. Initialize logger & config
 	app.Initialize("info", "test-version")
 	cfg := app.NewConfig()
-	storage := app.NewStorage()
+	storage := app.NewStorage(cfg.FileStoragePath)
 
 	// 2. Build the router + GZIP middleware
 	router := app.NewRouter(cfg, storage, "test-version")
@@ -237,7 +237,11 @@ func TestGzipCompression(t *testing.T) {
 		}
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if cerr := resp.Body.Close(); cerr != nil {
+				app.Log.Error().Err(cerr).Msg("failed to close response body")
+			}
+		}()
 
 		// We expect HTTP 201 Created from the shortener's POST endpoint
 		require.Equal(t, http.StatusCreated, resp.StatusCode)
@@ -258,7 +262,7 @@ func TestGzipCompression(t *testing.T) {
 		storage.SetIfAbsent("abcd1234", "https://example.com")
 
 		// Build a GET request
-		req, err := http.NewRequest(http.MethodGet, srv.URL+"/abcd1234", nil)
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/abcd1234", http.NoBody)
 		require.NoError(t, err)
 		// Indicate we want GZIP in the response
 		req.Header.Set("Accept-Encoding", "gzip")
@@ -272,7 +276,12 @@ func TestGzipCompression(t *testing.T) {
 		}
 		resp, err := client.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if cerr := resp.Body.Close(); cerr != nil {
+				// log the error
+				app.Log.Error().Err(cerr).Msg("failed to close response body")
+			}
+		}()
 
 		// For your shortener, GET /abcd1234 should redirect to https://example.com
 		require.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
