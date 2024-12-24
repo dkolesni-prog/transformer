@@ -1,4 +1,4 @@
-// cmd/shortener/main_test.go
+// Cmd/shortener/main_test.go.
 package main
 
 import (
@@ -157,7 +157,8 @@ func TestEndpoints(t *testing.T) {
 			// Check the response body
 			if tt.wantBody != "" {
 				// /api/shorten returns JSON {"result": "..."}
-				if tt.url == "/api/shorten" && strings.HasPrefix(tt.wantBody, cfg.BaseURL) && rec.Code == http.StatusCreated {
+				switch {
+				case tt.url == "/api/shorten" && strings.HasPrefix(tt.wantBody, cfg.BaseURL) && rec.Code == http.StatusCreated:
 					// JSON response
 					var responseData map[string]string
 					err := json.Unmarshal(rec.Body.Bytes(), &responseData)
@@ -166,12 +167,14 @@ func TestEndpoints(t *testing.T) {
 					assert.True(t, exists, "Response should contain 'result' key")
 					assert.True(t, strings.HasPrefix(result, cfg.BaseURL),
 						"Result URL should start with BaseURL")
-				} else if tt.url == "/" && rec.Code == http.StatusCreated {
+
+				case tt.url == "/" && rec.Code == http.StatusCreated:
 					// Plain text response from ShortenURL
 					// We only check that the body starts with BaseURL
 					assert.True(t, strings.HasPrefix(rec.Body.String(), tt.wantBody),
 						"Response body should start with BaseURL")
-				} else {
+
+				default:
 					// For other cases or error responses, compare exact body
 					assert.Equal(t, tt.wantBody, rec.Body.String(),
 						"Response body should match expected")

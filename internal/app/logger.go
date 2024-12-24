@@ -1,15 +1,16 @@
-//// internal/app/logger.go
-//
+// Internal/app/logger.go.
 
 package app
 
 import (
 	"bytes"
-	"github.com/rs/zerolog"
+	"errors"
 	"io"
 	"net/http"
 	"os"
 	"time"
+
+	"github.com/rs/zerolog"
 )
 
 var Log = zerolog.Nop()
@@ -25,9 +26,9 @@ func Initialize(level string, version string) {
 
 type responseWriter struct {
 	http.ResponseWriter
+	buffer     bytes.Buffer
 	statusCode int
 	size       int
-	buffer     bytes.Buffer
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
@@ -37,9 +38,19 @@ func (rw *responseWriter) WriteHeader(code int) {
 
 func (rw *responseWriter) Write(b []byte) (int, error) {
 	size, err := rw.ResponseWriter.Write(b)
+	if err != nil {
+		Log.Error().Err(err).Msg("Failed to write to the ResponseWriter of rw")
+		return size, errors.New("responseWriter.Write to ResponseWriter failed: " + err.Error())
+	}
 	rw.size += size
-	rw.buffer.Write(b)
-	return size, err
+
+	_, bufferErr := rw.buffer.Write(b)
+	if bufferErr != nil {
+		Log.Error().Err(bufferErr).Msg("Failed to write to the buffer of rw")
+		return size, errors.New("responseWriter.Write to buffer failed: " + bufferErr.Error())
+	}
+
+	return size, nil
 }
 
 func WithLogging(h http.Handler) http.Handler {
@@ -54,7 +65,7 @@ func WithLogging(h http.Handler) http.Handler {
 
 		ww := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
-		//обработка запроса
+		// обработка запроса
 		h.ServeHTTP(ww, r)
 
 		duration := time.Since(start)

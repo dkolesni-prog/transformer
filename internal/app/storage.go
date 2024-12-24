@@ -1,3 +1,5 @@
+// Internal/app/Storage.go.
+
 package app
 
 import (

@@ -1,15 +1,20 @@
+// Internal/app/endpoints.go.
+
 package app
 
 import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
-	"github.com/go-chi/chi/v5"
 	"io"
 	"math/big"
 	"net/http"
 	"net/url"
+
+	"github.com/go-chi/chi/v5"
 )
+
+const errSomethingWentWrong = "Something went wrong"
 
 func RandStringRunes(n int) string {
 	letterRunes := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -25,20 +30,20 @@ func RandStringRunes(n int) string {
 	return string(b)
 }
 
-func ensureTrailingSlash(url string) string {
-	if url[len(url)-1] != '/' {
-		return url + "/"
+func ensureTrailingSlash(rawURL string) string {
+	if rawURL[len(rawURL)-1] != '/' {
+		return rawURL + "/"
 	}
-	return url
+	return rawURL
 }
 
-func createShortURL(longURL string, storage *Storage, baseURL string) (string, error) { //mutual
+func createShortURL(longURL string, storage *Storage, baseURL string) (string, error) { // mutual
 	const maxRetries = 5
 	const randValLength = 8
 	var shortURL string
 	var success bool
 
-	for i := 0; i < maxRetries; i++ {
+	for i := range make([]int, maxRetries) {
 		randVal := RandStringRunes(randValLength)
 		shortURL, success = storage.SetIfAbsent(randVal, longURL)
 		if success {
@@ -53,12 +58,15 @@ func createShortURL(longURL string, storage *Storage, baseURL string) (string, e
 	return fullShortURL, nil
 }
 
-func checkIfURLCorrect(longURL string) bool { //mutual
-	_, err := http.Get(longURL)
-	if err != nil {
-		return false
-	}
-	return true
+func checkIfURLCorrect(longURL string) bool { // mutual
+	resp, err := http.Get(longURL)
+	defer func() {
+		if cerr := resp.Body.Close(); cerr != nil {
+			Log.Error().Err(cerr).Msg("Error closing resp body")
+		}
+	}()
+
+	return err == nil
 }
 
 func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
@@ -71,15 +79,20 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 	body, err := io.ReadAll(r.Body) // read the entire request body as a raw string
 	if err != nil {
 		Log.Error().Err(err).Msg("Error reading request body")
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
 	}
-	defer r.Body.Close()
+
+	defer func() {
+		if cerr := r.Body.Close(); cerr != nil {
+			Log.Error().Err(cerr).Msg("Error closing request body")
+		}
+	}()
 
 	longURL := string(body)
 	if longURL == "" {
 		Log.Error().Msg("Empty URL in request body")
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
 	}
 	Log.Debug().Str("longURL", longURL).Msg("URL retrieved from raw body")
@@ -87,7 +100,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 	parsedURL, err := url.ParseRequestURI(longURL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || !checkIfURLCorrect(longURL) {
 		Log.Error().Err(err).Msgf("Invalid URL: %v", longURL)
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
 	}
 	Log.Debug().Msg("URL validated successfully")
@@ -95,7 +108,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 	shortURL, err := createShortURL(longURL, storage, baseURL)
 	if err != nil {
 		Log.Error().Err(err).Msg("Error creating short URL")
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
 	}
 	Log.Debug().Str("shortURL", shortURL).Msg("Short URL created")
@@ -105,7 +118,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 
 	if _, err := w.Write([]byte(shortURL)); err != nil {
 		Log.Error().Err(err).Msg("Error writing response")
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
 	}
 
@@ -118,7 +131,12 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, storage *Storage, ba
 		return
 	}
 
-	defer r.Body.Close()
+	defer func() {
+		if cerr := r.Body.Close(); cerr != nil {
+			Log.Error().Err(cerr).Msg("Error closing request body")
+		}
+	}()
+
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusInternalServerError)
@@ -163,7 +181,9 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, storage *Storage, ba
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
-	w.Write(responseJSON)
+	if _, err := w.Write(responseJSON); err != nil {
+		Log.Error().Err(err).Msg("Failed to write JSON response")
+	}
 }
 
 func GetFullURL(w http.ResponseWriter, r *http.Request, storage *Storage) {
@@ -187,7 +207,7 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 	w.WriteHeader(http.StatusOK)
 	_, err := w.Write([]byte(version))
 	if err != nil {
-		http.Error(w, "Something went wrong", http.StatusInternalServerError)
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		Log.Printf("Error writing version response: %v", err)
 		return
 	}

@@ -1,8 +1,9 @@
-// cmd/shortener/main.go
+// Cmd/shortener/main.go.
 
 package main
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
@@ -32,8 +33,7 @@ func run() error {
 		app.Log.Info().
 			Err(err).
 			Msg("Failed to start server")
-		return err
+		return fmt.Errorf("failed to start server: %w", err)
 	}
-
 	return nil
 }
