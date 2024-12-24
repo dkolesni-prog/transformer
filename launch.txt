@@ -1,0 +1,25 @@
+curl -X POST http://localhost:8080/ -d "https://example.com"
+
+curl -i \
+     -X POST \
+     -H "Content-Type: application/json" \
+     -d '{"url":"https://practicum.yandex.ru"}' \
+     http://localhost:8080/api/shorten
+
+
+http://localhost:8080/cEcxvaJr
+
+
+
+
+launching linters:
+
+docker run --rm \
+    -v $(pwd):/app \
+    -v $(pwd)/golangci-lint/.cache/golangci-lint/v1.57.2:/root/.cache \
+    -w /app \
+    golangci/golangci-lint:v1.57.2 \
+        golangci-lint run \
+            -c .golangci.yml \
+        > ./golangci-lint/report-unformatted.json
+
