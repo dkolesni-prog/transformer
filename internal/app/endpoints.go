@@ -31,6 +31,10 @@ func RandStringRunes(n int) string {
 }
 
 func ensureTrailingSlash(rawURL string) string {
+	if len(rawURL) == 0 {
+		// Return as-is or set some default, e.g. "http://localhost:8080/"
+		return rawURL
+	}
 	if rawURL[len(rawURL)-1] != '/' {
 		return rawURL + "/"
 	}
@@ -58,15 +62,20 @@ func createShortURL(longURL string, storage *Storage, baseURL string) (string, e
 	return fullShortURL, nil
 }
 
-func checkIfURLCorrect(longURL string) bool { // mutual
+func checkIfURLCorrect(longURL string) bool {
 	resp, err := http.Get(longURL)
+	if err != nil {
+		Log.Error().Err(err).Msgf("Error in URL validation: %v", longURL)
+		return false
+	}
 	defer func() {
-		if cerr := resp.Body.Close(); cerr != nil {
-			Log.Error().Err(cerr).Msg("Error closing resp body")
+		if resp != nil && resp.Body != nil {
+			if cerr := resp.Body.Close(); cerr != nil {
+				Log.Error().Err(cerr).Msg("Error closing response body")
+			}
 		}
 	}()
-
-	return err == nil
+	return true
 }
 
 func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
