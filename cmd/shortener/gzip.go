@@ -2,11 +2,8 @@ package main
 
 import (
 	"compress/gzip"
-	_ "compress/gzip"
 	"io"
-	_ "io"
 	"net/http"
-	_ "net/http"
 )
 
 type compressWriter struct {
