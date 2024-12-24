@@ -62,22 +62,6 @@ func createShortURL(longURL string, storage *Storage, baseURL string) (string, e
 	return fullShortURL, nil
 }
 
-func checkIfURLCorrect(longURL string) bool {
-	resp, err := http.Get(longURL)
-	if err != nil {
-		Log.Error().Err(err).Msgf("Error in URL validation: %v", longURL)
-		return false
-	}
-	defer func() {
-		if resp != nil && resp.Body != nil {
-			if cerr := resp.Body.Close(); cerr != nil {
-				Log.Error().Err(cerr).Msg("Error closing response body")
-			}
-		}
-	}()
-	return true
-}
-
 func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
@@ -107,7 +91,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 	Log.Debug().Str("longURL", longURL).Msg("URL retrieved from raw body")
 
 	parsedURL, err := url.ParseRequestURI(longURL)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" || !checkIfURLCorrect(longURL) {
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		Log.Error().Err(err).Msgf("Invalid URL: %v", longURL)
 		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
 		return
