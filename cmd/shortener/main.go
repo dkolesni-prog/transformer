@@ -1,30 +1,39 @@
+// cmd/shortener/main.go
+
 package main
 
 import (
-	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 )
 
-var Version string = "iter5"
+var Version string = "iter7"
 
 func main() {
+	app.Initialize("info", Version)
 	if err := run(); err != nil {
-		log.Fatalf("Failed to run server: %v", err)
+		app.Log.Info().
+			Err(err).
+			Msg("Failed to run server")
 	}
 }
 
-// run sets up the configuration, storage, router, and starts the HTTP server.
 func run() error {
 	cfg := app.NewConfig()
 	storage := app.NewStorage()
 	router := app.NewRouter(cfg, storage, Version)
 
-	log.Println("Running server on", cfg.RunAddr)
-	if err := http.ListenAndServe(cfg.RunAddr, router); err != nil {
-		return fmt.Errorf("failed to start server: %w", err)
+	app.Log.Info().
+		Str("address", cfg.RunAddr).
+		Msg("Running server on")
+
+	if err := http.ListenAndServe(cfg.RunAddr, app.WithLogging(router)); err != nil {
+		app.Log.Info().
+			Err(err).
+			Msg("Failed to start server")
+		return err
 	}
+
 	return nil
 }

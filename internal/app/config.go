@@ -11,13 +11,6 @@ type Config struct {
 	BaseURL string
 }
 
-func ensureTrailingSlash(url string) string {
-	if len(url) > 0 && url[len(url)-1] != '/' {
-		return url + "/"
-	}
-	return url
-}
-
 func NewConfig() *Config {
 	cfg := Config{}
 	flag.StringVar(&cfg.RunAddr, "a", ":8080", "address and port to run server")

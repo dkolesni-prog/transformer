@@ -21,5 +21,9 @@ func NewRouter(cfg *Config, storage *Storage, version string) http.Handler {
 		GetFullURL(w, r, storage)
 	})
 
+	r.Post("/api/shorten", func(w http.ResponseWriter, r *http.Request) {
+		ShortenURLJSON(w, r, storage, cfg.BaseURL)
+	})
+
 	return r
 }
