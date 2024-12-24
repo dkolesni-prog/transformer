@@ -1,8 +1,11 @@
-// Cmd/shortener/main_test.go.
+// cmd/shortener/main_test.go
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestEndpoints tests the main endpoints of the URL shortener service.
@@ -33,7 +37,7 @@ func TestEndpoints(t *testing.T) {
 		wantHeader  map[string]string
 	}{
 		{
-			// -- CHANGED: now we send raw URL in the body instead of form-encoded
+			// now we send raw URL in the body instead of form-encoded
 			name:        "POST valid URL (raw body)",
 			method:      http.MethodPost,
 			url:         "/",
@@ -86,8 +90,7 @@ func TestEndpoints(t *testing.T) {
 			},
 		},
 		{
-			// -- CHANGED: code returns 400 and "Failed to parse JSON\n"
-			//             if JSON is malformed
+			// code returns 400 and "Failed to parse JSON\n" if JSON is malformed
 			name:        "POST invalid JSON",
 			method:      http.MethodPost,
 			url:         "/api/shorten",
@@ -98,8 +101,7 @@ func TestEndpoints(t *testing.T) {
 			wantBody:    "Failed to parse JSON\n",
 		},
 		{
-			// -- CHANGED: code returns 400 and "Empty url field in JSON\n"
-			//             if "url" field is missing
+			// code returns 400 and "Empty url field in JSON\n" if "url" is missing
 			name:        "POST missing URL field",
 			method:      http.MethodPost,
 			url:         "/api/shorten",
@@ -110,8 +112,7 @@ func TestEndpoints(t *testing.T) {
 			wantBody:    "Empty url field in JSON\n",
 		},
 		{
-			// -- CHANGED: code returns 400 and "Invalid URL\n"
-			//             if URL is invalid
+			// code returns 400 and "Invalid URL\n" if URL is invalid
 			name:        "POST invalid URL format",
 			method:      http.MethodPost,
 			url:         "/api/shorten",
@@ -156,8 +157,8 @@ func TestEndpoints(t *testing.T) {
 
 			// Check the response body
 			if tt.wantBody != "" {
-				// /api/shorten returns JSON {"result": "..."}
 				switch {
+				// /api/shorten returns JSON {"result": "..."}
 				case tt.url == "/api/shorten" && strings.HasPrefix(tt.wantBody, cfg.BaseURL) && rec.Code == http.StatusCreated:
 					// JSON response
 					var responseData map[string]string
@@ -170,7 +171,7 @@ func TestEndpoints(t *testing.T) {
 
 				case tt.url == "/" && rec.Code == http.StatusCreated:
 					// Plain text response from ShortenURL
-					// We only check that the body starts with BaseURL
+					// Check that body starts with BaseURL
 					assert.True(t, strings.HasPrefix(rec.Body.String(), tt.wantBody),
 						"Response body should start with BaseURL")
 
@@ -181,11 +182,109 @@ func TestEndpoints(t *testing.T) {
 				}
 			}
 
-			// Check the headers
+			// Check headers
 			for key, wantValue := range tt.wantHeader {
 				gotValue := rec.Header().Get(key)
 				assert.Equal(t, wantValue, gotValue, "Header %s should match", key)
 			}
 		})
 	}
+}
+
+// TestGzipCompression demonstrates how to test that your service
+// can both accept gzip-compressed requests and return gzipped responses.
+func TestGzipCompression(t *testing.T) {
+	// 1. Initialize logger & config
+	app.Initialize("info", "test-version")
+	cfg := app.NewConfig()
+	storage := app.NewStorage()
+
+	// 2. Build the router + GZIP middleware
+	router := app.NewRouter(cfg, storage, "test-version")
+	// If your gzipMiddleware is defined as func gzipMiddleware(next http.Handler) http.Handler,
+	// wrap the router:
+	wrappedHandler := gzipMiddleware(router)
+
+	// 3. Spin up an httptest server to test real HTTP requests
+	srv := httptest.NewServer(wrappedHandler)
+	defer srv.Close()
+
+	// 4. Body we will send in POST requests
+	requestBody := "https://example.com"
+
+	// We'll assume the server responds with a short link that starts with cfg.BaseURL
+	t.Run("sends_gzip", func(t *testing.T) {
+		// Compress the request body
+		gzippedBuf := bytes.NewBuffer(nil)
+		zipWriter := gzip.NewWriter(gzippedBuf)
+		_, err := zipWriter.Write([]byte(requestBody))
+		require.NoError(t, err, "error writing to gzip writer")
+		require.NoError(t, zipWriter.Close(), "error closing gzip writer")
+
+		// Build the request
+		req, err := http.NewRequest(http.MethodPost, srv.URL+"/", gzippedBuf)
+		require.NoError(t, err)
+		// Indicate we send gzipped data
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Content-Type", "text/plain")
+
+		// Do the request
+		client := &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Disallow following redirects
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// We expect HTTP 201 Created from the shortener's POST endpoint
+		require.Equal(t, http.StatusCreated, resp.StatusCode)
+
+		// Read response body
+		bodyBytes, err := io.ReadAll(resp.Body)
+		require.NoError(t, err)
+		respBody := string(bodyBytes)
+
+		// Check that the response starts with cfg.BaseURL
+		require.True(t,
+			strings.HasPrefix(respBody, cfg.BaseURL),
+			"Expected response body %q to start with %q", respBody, cfg.BaseURL)
+	})
+
+	t.Run("accepts_gzip", func(t *testing.T) {
+		// Put something in the storage so GET /somecode -> redirect
+		storage.SetIfAbsent("abcd1234", "https://example.com")
+
+		// Build a GET request
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/abcd1234", nil)
+		require.NoError(t, err)
+		// Indicate we want GZIP in the response
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		// Do the request
+		client := &http.Client{
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				// Disallow following redirects
+				return http.ErrUseLastResponse
+			},
+		}
+		resp, err := client.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		// For your shortener, GET /abcd1234 should redirect to https://example.com
+		require.Equal(t, http.StatusTemporaryRedirect, resp.StatusCode)
+		location := resp.Header.Get("Location")
+		require.Equal(t, "https://example.com", location, "Location header mismatch")
+
+		// Typically a redirect won't contain a huge body to compress,
+		// but if you had a 200 OK + JSON body scenario, you'd read & decompress it:
+		// gzReader, err := gzip.NewReader(resp.Body)
+		// require.NoError(t, err)
+		// decompressed, err := io.ReadAll(gzReader)
+		// require.NoError(t, err)
+		// require.JSONEq(t, someExpectedJSON, string(decompressed))
+	})
 }

@@ -4,6 +4,7 @@ package app
 import (
 	"flag"
 	"os"
+	"sync"
 )
 
 type Config struct {
@@ -11,11 +12,16 @@ type Config struct {
 	BaseURL string
 }
 
+var parseOnce sync.Once
+
 func NewConfig() *Config {
 	cfg := Config{}
-	flag.StringVar(&cfg.RunAddr, "a", ":8080", "address and port to run server")
-	flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080/", "base URL for shortened links")
-	flag.Parse()
+
+	parseOnce.Do(func() {
+		flag.StringVar(&cfg.RunAddr, "a", ":8080", "address and port to run server")
+		flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080/", "base URL for shortened links")
+		flag.Parse()
+	})
 
 	if envRunAddr, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
 		cfg.RunAddr = envRunAddr
@@ -26,6 +32,5 @@ func NewConfig() *Config {
 	}
 
 	cfg.BaseURL = ensureTrailingSlash(cfg.BaseURL)
-
 	return &cfg
 }

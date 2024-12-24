@@ -22,3 +22,4 @@ docker run --rm \
         golangci-lint run \
             -c .golangci.yml \
         > ./golangci-lint/report-unformatted.json
+

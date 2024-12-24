@@ -5,11 +5,37 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 )
 
 var Version string = "iter7"
+
+func gzipMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ow := w
+
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			cw := newCompressWriter(w)
+			ow = cw
+			defer cw.Close()
+		}
+
+		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
+			cr, err := newCompressReader(r.Body)
+			if err != nil {
+				http.Error(w, "Failed to create gzip reader", http.StatusInternalServerError)
+				return
+			}
+			defer cr.Close()
+			r.Body = cr
+		}
+
+		// Pass to the next handler
+		next.ServeHTTP(ow, r)
+	})
+}
 
 func main() {
 	app.Initialize("info", Version)
@@ -29,7 +55,7 @@ func run() error {
 		Str("address", cfg.RunAddr).
 		Msg("Running server on")
 
-	if err := http.ListenAndServe(cfg.RunAddr, app.WithLogging(router)); err != nil {
+	if err := http.ListenAndServe(cfg.RunAddr, app.WithLogging(gzipMiddleware(router))); err != nil {
 		app.Log.Info().
 			Err(err).
 			Msg("Failed to start server")
