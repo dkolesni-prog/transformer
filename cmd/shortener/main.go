@@ -39,8 +39,6 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			}()
 			r.Body = cr
 		}
-
-		// Pass to the next handler
 		next.ServeHTTP(ow, r)
 	})
 }

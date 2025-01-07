@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 )
@@ -26,10 +27,7 @@ func newCompressWriter(w http.ResponseWriter) *compressWriter {
 func (c *compressWriter) Write(p []byte) (int, error) {
 	n, err := c.zw.Write(p)
 	if err != nil {
-		// 1) Log the original error with context:
 		app.Log.Error().Err(err).Msg("gzip writer write error")
-
-		// 2) Return a new error that includes the original error text.
 		return n, errors.New("gzip writer write: " + err.Error())
 	}
 	return n, nil
@@ -40,7 +38,8 @@ func (c *compressWriter) Header() http.Header {
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
-	if statusCode < 300 {
+	contentType := c.w.Header().Get("Content-Type")
+	if strings.HasPrefix(contentType, "application/json") || strings.HasPrefix(contentType, "text/html") {
 		c.w.Header().Set("Content-Encoding", "gzip")
 	}
 	c.w.WriteHeader(statusCode)
@@ -71,7 +70,6 @@ func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 func (c *compressReader) Read(p []byte) (int, error) {
 	n, err := c.zr.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
-		// log + wrap the error
 		app.Log.Error().Err(err).Msg("gzip reader read error")
 		return n, errors.New("gzip reader read: " + err.Error())
 	}
