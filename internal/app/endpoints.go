@@ -32,7 +32,6 @@ func RandStringRunes(n int) string {
 
 func ensureTrailingSlash(rawURL string) string {
 	if len(rawURL) == 0 {
-		// Return as-is or set some default, e.g. "http://localhost:8080/"
 		return rawURL
 	}
 	if rawURL[len(rawURL)-1] != '/' {
