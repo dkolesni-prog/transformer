@@ -43,7 +43,10 @@ package app
 import (
 	"flag"
 	"os"
+	"sync"
 )
+
+var initFlagsOnce sync.Once
 
 type Config struct {
 	RunAddr         string
@@ -53,8 +56,11 @@ type Config struct {
 
 func NewConfig() *Config {
 	var filePath string
-	flag.StringVar(&filePath, "f", "", "Path to the file storage")
-	flag.Parse()
+
+	initFlagsOnce.Do(func() {
+		flag.StringVar(&filePath, "f", "", "Path to the file storage")
+		flag.Parse()
+	})
 
 	// Check environment variables first
 	envFilePath := os.Getenv("FILE_STORAGE_PATH")
@@ -62,7 +68,7 @@ func NewConfig() *Config {
 		filePath = envFilePath
 	}
 
-	// Fallback to default if neither flag nor environment variable is set
+	// IF neither flag nor environment variable is set to default
 	if filePath == "" {
 		filePath = "shortener_data.json"
 	}
