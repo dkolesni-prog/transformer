@@ -24,9 +24,18 @@ func gzipMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			defer cr.Close()
-			r.Body = io.NopCloser(cr)
+
+			// Replace r.Body with the decompressed reader
+			decompressedBody, err := io.ReadAll(cr)
+			if err != nil {
+				app.Log.Error().Err(err).Msg("Failed to read decompressed body")
+				http.Error(w, "Failed to read decompressed body", http.StatusInternalServerError)
+				return
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(decompressedBody)))
 		}
 
+		// Prepare gzipped responses
 		ow := w
 		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			cw := newCompressWriter(w)
