@@ -66,7 +66,7 @@ func run() error {
 		Str("file_storage", cfg.FileStoragePath).
 		Msg("Running server on")
 
-	if err := http.ListenAndServe(cfg.RunAddr, app.WithLogging(router)); err != nil {
+	if err := http.ListenAndServe(cfg.RunAddr, app.WithLogging(gzipMiddleware(router))); err != nil {
 		app.Log.Info().
 			Err(err).
 			Msg("Failed to start server")

@@ -1,3 +1,5 @@
+//Cmd/shortener/gzip.go
+
 package main
 
 import (

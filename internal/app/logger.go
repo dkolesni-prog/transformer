@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/rs/zerolog"
@@ -75,6 +76,7 @@ func WithLogging(h http.Handler) http.Handler {
 			Str("method", r.Method).
 			Dur("duration", duration).
 			Str("request_body", requestBody.String()).
+			Str("size", strconv.FormatInt(r.ContentLength, 10)).
 			Msg("Запрос получен")
 
 		Log.Info().
