@@ -16,18 +16,18 @@ import (
 
 const errSomethingWentWrong = "Something went wrong"
 
-func RandStringRunes(n int) string {
+func RandStringRunes(n int) (string, error) {
 	letterRunes := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 	b := make([]rune, n)
 	for i := range b {
 		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letterRunes))))
 		if err != nil {
 			Log.Printf("Error generating random number: %v", err)
-			return ""
+			return "", err
 		}
 		b[i] = letterRunes[num.Int64()]
 	}
-	return string(b)
+	return string(b), nil
 }
 
 func ensureTrailingSlash(rawURL string) string {
@@ -47,12 +47,12 @@ func createShortURL(longURL string, storage *Storage, baseURL string) (string, e
 	var success bool
 
 	for i := range make([]int, maxRetries) {
-		randVal := RandStringRunes(randValLength)
+		randVal, err := RandStringRunes(randValLength)
 		shortURL, success = storage.SetIfAbsent(randVal, longURL)
 		if success {
 			break
 		}
-		if i == maxRetries-1 {
+		if i == maxRetries-1 || err != nil {
 			return "", errors.New("could not generate unique URL")
 		}
 	}

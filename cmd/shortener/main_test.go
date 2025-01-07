@@ -131,7 +131,7 @@ func TestGzipHandling(t *testing.T) {
 		}
 	})
 
-	ts := httptest.NewServer(gzipMiddleware(router))
+	ts := httptest.NewServer(app.GzipMiddleware(router))
 	defer ts.Close()
 
 	t.Run("Accept gzip-encoded request", func(t *testing.T) {
