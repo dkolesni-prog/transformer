@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -14,31 +15,29 @@ var Version string = "iter7"
 
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ow := w
-
+		// Decompress gzipped requests
 		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
+			cr, err := newCompressReader(r.Body)
+			if err != nil {
+				app.Log.Error().Err(err).Msg("Failed to create gzip reader")
+				http.Error(w, "Failed to decode gzip", http.StatusBadRequest)
+				return
+			}
+			defer cr.Close()
+			r.Body = io.NopCloser(cr)
+		}
+
+		ow := w
+		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
 			cw := newCompressWriter(w)
 			ow = cw
 			defer func() {
 				if cerr := cw.Close(); cerr != nil {
-					app.Log.Error().Err(cerr).Msg("failed to close gzip writer")
+					app.Log.Error().Err(cerr).Msg("Failed to close gzip writer")
 				}
 			}()
 		}
 
-		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
-			cr, err := newCompressReader(r.Body)
-			if err != nil {
-				http.Error(w, "Failed to create gzip reader", http.StatusInternalServerError)
-				return
-			}
-			defer func() {
-				if cerr := cr.Close(); cerr != nil {
-					app.Log.Error().Err(cerr).Msg("failed to close gzip reader")
-				}
-			}()
-			r.Body = cr
-		}
 		next.ServeHTTP(ow, r)
 	})
 }
