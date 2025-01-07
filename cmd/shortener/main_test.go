@@ -121,11 +121,17 @@ func TestGzipHandling(t *testing.T) {
 		if strings.Contains(string(body), "json") {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`{"message": "JSON response"}`))
+			_, err := w.Write([]byte(`{"message": "JSON response"}`))
+			if err != nil {
+				return
+			}
 		} else if strings.Contains(string(body), "html") {
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("<html><body>HTML response</body></html>"))
+			_, err := w.Write([]byte("<html><body>HTML response</body></html>"))
+			if err != nil {
+				return
+			}
 		} else {
 			http.Error(w, "Unsupported content", http.StatusBadRequest)
 		}
