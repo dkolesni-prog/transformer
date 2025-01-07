@@ -1,15 +1,9 @@
-//Cmd/shortener/gzip.go
-
 package main
 
 import (
 	"compress/gzip"
-	"errors"
 	"io"
 	"net/http"
-	"strings"
-
-	"github.com/dkolesni-prog/transformer/internal/app"
 )
 
 type compressWriter struct {
@@ -24,35 +18,24 @@ func newCompressWriter(w http.ResponseWriter) *compressWriter {
 	}
 }
 
-func (c *compressWriter) Write(p []byte) (int, error) {
-	n, err := c.zw.Write(p)
-	if err != nil {
-		app.Log.Error().Err(err).Msg("gzip writer write error")
-		return n, errors.New("gzip writer write: " + err.Error())
-	}
-	return n, nil
-}
-
 func (c *compressWriter) Header() http.Header {
 	return c.w.Header()
 }
 
+func (c *compressWriter) Write(p []byte) (int, error) {
+	return c.zw.Write(p)
+}
+
 func (c *compressWriter) WriteHeader(statusCode int) {
-	contentType := c.w.Header().Get("Content-Type")
-	if strings.HasPrefix(contentType, "application/json") || strings.HasPrefix(contentType, "text/html") {
-		c.w.Header().Set("Content-Encoding", "gzip")
-	}
+	c.w.Header().Set("Content-Encoding", "gzip")
 	c.w.WriteHeader(statusCode)
 }
 
 func (c *compressWriter) Close() error {
-	if err := c.zw.Close(); err != nil {
-		app.Log.Error().Err(err).Msg("gzip writer close error")
-		return errors.New("gzip writer close: " + err.Error())
-	}
-	return nil
+	return c.zw.Close()
 }
 
+// compressReader wraps io.ReadCloser to transparently decompress request bodies.
 type compressReader struct {
 	r  io.ReadCloser
 	zr *gzip.Reader
@@ -61,29 +44,18 @@ type compressReader struct {
 func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
-		app.Log.Error().Err(err).Msg("create gzip reader error")
-		return nil, errors.New("create gzip reader: " + err.Error())
+		return nil, err
 	}
 	return &compressReader{r: r, zr: zr}, nil
 }
 
 func (c *compressReader) Read(p []byte) (int, error) {
-	n, err := c.zr.Read(p)
-	if err != nil && !errors.Is(err, io.EOF) {
-		app.Log.Error().Err(err).Msg("gzip reader read error")
-		return n, errors.New("gzip reader read: " + err.Error())
-	}
-	return n, nil
+	return c.zr.Read(p)
 }
 
 func (c *compressReader) Close() error {
-	if err := c.r.Close(); err != nil {
-		app.Log.Error().Err(err).Msg("closing underlying reader")
-		return errors.New("closing underlying reader: " + err.Error())
-	}
 	if err := c.zr.Close(); err != nil {
-		app.Log.Error().Err(err).Msg("gzip reader close error")
-		return errors.New("gzip reader close: " + err.Error())
+		return err
 	}
-	return nil
+	return c.r.Close()
 }

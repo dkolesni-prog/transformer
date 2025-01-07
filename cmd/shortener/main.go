@@ -1,62 +1,45 @@
-// Cmd/shortener/main.go.
-
 package main
 
 import (
-	"fmt"
-	"io"
 	"net/http"
-	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 )
 
 var Version string = "iter7"
 
+// gzipMiddleware handles gzip compression/decompression for requests and responses.
 func gzipMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Decompress gzipped requests
-		if strings.Contains(r.Header.Get("Content-Encoding"), "gzip") {
+		// Decompress gzipped request body
+		if r.Header.Get("Content-Encoding") == "gzip" {
 			cr, err := newCompressReader(r.Body)
 			if err != nil {
-				app.Log.Error().Err(err).Msg("Failed to create gzip reader")
 				http.Error(w, "Failed to decode gzip", http.StatusBadRequest)
 				return
 			}
 			defer cr.Close()
 
-			// Replace r.Body with the decompressed reader
-			decompressedBody, err := io.ReadAll(cr)
-			if err != nil {
-				app.Log.Error().Err(err).Msg("Failed to read decompressed body")
-				http.Error(w, "Failed to read decompressed body", http.StatusInternalServerError)
-				return
-			}
-			r.Body = io.NopCloser(strings.NewReader(string(decompressedBody)))
+			r.Body = cr
+			r.Header.Del("Content-Encoding")
 		}
 
-		// Prepare gzipped responses
-		ow := w
-		if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		// Compress responses if client supports gzip
+		if r.Header.Get("Accept-Encoding") == "gzip" {
 			cw := newCompressWriter(w)
-			ow = cw
-			defer func() {
-				if cerr := cw.Close(); cerr != nil {
-					app.Log.Error().Err(cerr).Msg("Failed to close gzip writer")
-				}
-			}()
+			defer cw.Close()
+			w = cw
+			w.Header().Set("Content-Encoding", "gzip")
 		}
 
-		next.ServeHTTP(ow, r)
+		next.ServeHTTP(w, r)
 	})
 }
 
 func main() {
 	app.Initialize("info", Version)
 	if err := run(); err != nil {
-		app.Log.Info().
-			Err(err).
-			Msg("Failed to run server")
+		app.Log.Info().Err(err).Msg("Failed to run server")
 	}
 }
 
@@ -72,11 +55,5 @@ func run() error {
 		Str("file_storage", cfg.FileStoragePath).
 		Msg("Running server on")
 
-	if err := http.ListenAndServe(cfg.RunAddr, gzipMiddleware(app.WithLogging(router))); err != nil {
-		app.Log.Info().
-			Err(err).
-			Msg("Failed to start server")
-		return fmt.Errorf("failed to start server: %w", err)
-	}
-	return nil
+	return http.ListenAndServe(cfg.RunAddr, gzipMiddleware(app.WithLogging(router)))
 }

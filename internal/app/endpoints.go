@@ -62,6 +62,7 @@ func createShortURL(longURL string, storage *Storage, baseURL string) (string, e
 }
 
 func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
+	Log.Debug().Msg("Entered ShortenURL handler")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		Log.Debug().Msg("Invalid method")
@@ -82,6 +83,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 	}()
 
 	longURL := string(body)
+	Log.Debug().Msgf("Long URL: %s", longURL)
 	if longURL == "" {
 		Log.Error().Msg("Empty URL in request body")
 		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
@@ -118,6 +120,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, storage *Storage, baseUR
 }
 
 func ShortenURLJSON(w http.ResponseWriter, r *http.Request, storage *Storage, baseURL string) {
+	Log.Debug().Msg("Entered ShortenURLJSON handler")
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
@@ -154,7 +157,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, storage *Storage, ba
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
-
+	Log.Debug().Msgf("Long URL: %s", parsedURL)
 	shortURL, err := createShortURL(reqData.URL, storage, baseURL)
 	if err != nil {
 		http.Error(w, "Failed to create short URL", http.StatusInternalServerError)
