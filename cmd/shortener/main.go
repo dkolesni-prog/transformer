@@ -1,30 +1,31 @@
 package main
 
 import (
-	"fmt"
-	"log"
 	"net/http"
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 )
 
-var Version string = "iter5"
+var Version string = "iter7"
 
 func main() {
+	app.Initialize("info", Version)
 	if err := run(); err != nil {
-		log.Fatalf("Failed to run server: %v", err)
+		app.Log.Info().Err(err).Msg("Failed to run server")
 	}
 }
 
-// run sets up the configuration, storage, router, and starts the HTTP server.
 func run() error {
 	cfg := app.NewConfig()
-	storage := app.NewStorage()
+
+	storage := app.NewStorage(cfg.FileStoragePath)
+
 	router := app.NewRouter(cfg, storage, Version)
 
-	log.Println("Running server on", cfg.RunAddr)
-	if err := http.ListenAndServe(cfg.RunAddr, router); err != nil {
-		return fmt.Errorf("failed to start server: %w", err)
-	}
-	return nil
+	app.Log.Info().
+		Str("address", cfg.RunAddr).
+		Str("file_storage", cfg.FileStoragePath).
+		Msg("Running server on")
+
+	return http.ListenAndServe(cfg.RunAddr, app.GzipMiddleware(app.WithLogging(router)))
 }

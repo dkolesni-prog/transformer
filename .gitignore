@@ -4,6 +4,18 @@
 *.dll
 *.so
 *.dylib
+.DS_Store
+.golangci.yml
+Dockerfile
+allProjectLinters.txt
+ci.txt
+cmd/shortener/task.txt
+golangci-lint/
+internal/app/test_data.json
+shortener
+shortener_data.json
+cmd/shortener/shortener_data.json
+
 
 golangci-lint/.cache/
 

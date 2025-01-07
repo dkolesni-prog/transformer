@@ -1,3 +1,5 @@
+// Internal/app/router.go.
+
 package app
 
 import (
@@ -19,6 +21,10 @@ func NewRouter(cfg *Config, storage *Storage, version string) http.Handler {
 
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 		GetFullURL(w, r, storage)
+	})
+
+	r.Post("/api/shorten", func(w http.ResponseWriter, r *http.Request) {
+		ShortenURLJSON(w, r, storage, cfg.BaseURL)
 	})
 
 	return r

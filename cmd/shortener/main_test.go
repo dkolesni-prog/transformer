@@ -1,7 +1,9 @@
-// Cmd/shortener/main_test.go.
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -9,20 +11,23 @@ import (
 
 	"github.com/dkolesni-prog/transformer/internal/app"
 	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// TestEndpoints тестирует основные эндпоинты сервиса коротких URL.
+// TestEndpoints tests the main endpoints of the URL shortening service.
 func TestEndpoints(t *testing.T) {
-	// Инициализация конфигурации и хранилища
+	// Update with a valid file path for the test
+	storageFilePath := "test_storage.json"
 	cfg := app.NewConfig()
-	storage := app.NewStorage()
+	storage := app.NewStorage(storageFilePath)
 
 	tests := []struct {
 		name       string
 		method     string
 		url        string
 		body       string
-		setup      func(*app.Storage) // Функция для предварительной настройки хранилища
+		setup      func(*app.Storage)
 		wantCode   int
 		wantBody   string
 		wantHeader map[string]string
@@ -34,10 +39,9 @@ func TestEndpoints(t *testing.T) {
 			body:     "https://example.com",
 			setup:    func(s *app.Storage) {},
 			wantCode: http.StatusCreated,
-			// Проверяем, что тело ответа начинается с BaseURL
 			wantBody: cfg.BaseURL,
 			wantHeader: map[string]string{
-				"Content-Type": "text/plain",
+				"Content-Type": "text/plain; charset=utf-8",
 			},
 		},
 		{
@@ -67,12 +71,10 @@ func TestEndpoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Настройка хранилища перед каждым тестом
 			if tt.setup != nil {
 				tt.setup(storage)
 			}
 
-			// Создание запроса и рекордера
 			var req *http.Request
 			if tt.body != "" {
 				req = httptest.NewRequest(tt.method, tt.url, strings.NewReader(tt.body))
@@ -81,38 +83,111 @@ func TestEndpoints(t *testing.T) {
 			}
 			rec := httptest.NewRecorder()
 
-			// Настройка маршрутизатора chi
 			r := chi.NewRouter()
-
-			// Регистрация обработчиков
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 				app.ShortenURL(w, r, storage, cfg.BaseURL)
 			})
-
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 				app.GetFullURL(w, r, storage)
 			})
 
-			// Обработка запроса
 			r.ServeHTTP(rec, req)
 
-			// Проверка кода статуса
 			if rec.Code != tt.wantCode {
-				t.Errorf("получен код статуса %d, ожидается %d", rec.Code, tt.wantCode)
+				t.Errorf("got status code %d, want %d", rec.Code, tt.wantCode)
 			}
 
-			// Проверка тела ответа
 			if tt.wantBody != "" && !strings.HasPrefix(rec.Body.String(), tt.wantBody) {
-				t.Errorf("получено тело %q, ожидается префикс %q", rec.Body.String(), tt.wantBody)
+				t.Errorf("got body %q, want prefix %q", rec.Body.String(), tt.wantBody)
 			}
 
-			// Проверка заголовков
 			for key, wantValue := range tt.wantHeader {
 				gotValue := rec.Header().Get(key)
 				if gotValue != wantValue {
-					t.Errorf("получен заголовок %q=%q, ожидается %q=%q", key, gotValue, key, wantValue)
+					t.Errorf("got header %q=%q, want %q=%q", key, gotValue, key, wantValue)
 				}
 			}
 		})
 	}
+}
+
+// TestGzipHandling checks gzip request/response support and content-type handling.
+func TestGzipHandling(t *testing.T) {
+	router := http.NewServeMux()
+	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		defer r.Body.Close()
+
+		if strings.Contains(string(body), "json") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte(`{"message": "JSON response"}`))
+			if err != nil {
+				return
+			}
+		} else if strings.Contains(string(body), "html") {
+			w.Header().Set("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			_, err := w.Write([]byte("<html><body>HTML response</body></html>"))
+			if err != nil {
+				return
+			}
+		} else {
+			http.Error(w, "Unsupported content", http.StatusBadRequest)
+		}
+	})
+
+	ts := httptest.NewServer(app.GzipMiddleware(router))
+	defer ts.Close()
+
+	t.Run("Accept gzip-encoded request", func(t *testing.T) {
+		body := `{"content":"json"}`
+		var gzippedBody bytes.Buffer
+		gz := gzip.NewWriter(&gzippedBody)
+		_, err := gz.Write([]byte(body))
+		require.NoError(t, err)
+		require.NoError(t, gz.Close())
+
+		req, _ := http.NewRequest("POST", ts.URL, &gzippedBody)
+		req.Header.Set("Content-Encoding", "gzip")
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("Serve gzip-encoded response", func(t *testing.T) {
+		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"html"}`))
+		req.Header.Set("Content-Type", "text/html")
+		req.Header.Set("Accept-Encoding", "gzip")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+
+		gzr, err := gzip.NewReader(resp.Body)
+		require.NoError(t, err)
+		defer gzr.Close()
+
+		body, err := io.ReadAll(gzr)
+		require.NoError(t, err)
+		assert.Equal(t, "<html><body>HTML response</body></html>", string(body))
+	})
+
+	t.Run("Unsupported content type", func(t *testing.T) {
+		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"unknown"}`))
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	})
 }
