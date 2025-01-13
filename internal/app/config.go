@@ -1,8 +1,10 @@
 // Internal/app/config.go.
+
 package app
 
 import (
 	"flag"
+	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
 	"os"
 	"sync"
 )
@@ -11,6 +13,7 @@ type Config struct {
 	RunAddr         string
 	BaseURL         string
 	FileStoragePath string
+	DatabaseDSN     string
 }
 
 var parseOnce sync.Once
@@ -22,6 +25,7 @@ func NewConfig() *Config {
 		flag.StringVar(&cfg.RunAddr, "a", ":8080", "address and port to run server")
 		flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080/", "base URL for shortened links")
 		flag.StringVar(&cfg.FileStoragePath, "f", "shortener_data.json", "path to file with shortener data")
+		flag.StringVar(&cfg.DatabaseDSN, "d", "", "connection string to database")
 		flag.Parse()
 	})
 	if envRunAddr, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
@@ -33,48 +37,6 @@ func NewConfig() *Config {
 	if envFilePath, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		cfg.FileStoragePath = envFilePath
 	}
-	cfg.BaseURL = ensureTrailingSlash(cfg.BaseURL)
+	cfg.BaseURL = endpoints.EnsureTrailingSlash(cfg.BaseURL)
 	return &cfg
 }
-
-//package app
-//
-//import (
-//	"flag"
-//	"os"
-//	"sync"
-//)
-//
-//var initFlagsOnce sync.Once
-//
-//type Config struct {
-//	RunAddr         string
-//	FileStoragePath string
-//	BaseURL         string
-//}
-//
-//func NewConfig() *Config {
-//	var filePath string
-//
-//	initFlagsOnce.Do(func() {
-//		flag.StringVar(&filePath, "f", "", "Path to the file storage")
-//		flag.Parse()
-//	})
-//
-//	// Check environment variables first
-//	envFilePath := os.Getenv("FILE_STORAGE_PATH")
-//	if envFilePath != "" {
-//		filePath = envFilePath
-//	}
-//
-//	// IF neither flag nor environment variable is set to default
-//	if filePath == "" {
-//		filePath = "shortener_data.json"
-//	}
-//
-//	return &Config{
-//		RunAddr:         ":8080",
-//		FileStoragePath: filePath,
-//		BaseURL:         "http://localhost:8080",
-//	}
-//}
