@@ -3,9 +3,6 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
-	"github.com/dkolesni-prog/transformer/internal/store"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -23,14 +20,14 @@ func TestEndpoints(t *testing.T) {
 	// Update with a valid file path for the test
 	storageFilePath := "test_storage.json"
 	cfg := app.NewConfig()
-	storage := store.NewStorage(storageFilePath)
+	storage := app.NewStorage(storageFilePath)
 
 	tests := []struct {
 		name       string
 		method     string
 		url        string
 		body       string
-		setup      func(*storage.Storage)
+		setup      func(*app.Storage)
 		wantCode   int
 		wantBody   string
 		wantHeader map[string]string
@@ -40,7 +37,7 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodPost,
 			url:      "/",
 			body:     "https://example.com",
-			setup:    func(s *storage.Storage) {},
+			setup:    func(s *app.Storage) {},
 			wantCode: http.StatusCreated,
 			wantBody: cfg.BaseURL,
 			wantHeader: map[string]string{
@@ -52,7 +49,7 @@ func TestEndpoints(t *testing.T) {
 			method: http.MethodGet,
 			url:    "/abcd1234",
 			body:   "",
-			setup: func(s *storage.Storage) {
+			setup: func(s *app.Storage) {
 				s.SetIfAbsent("abcd1234", "https://example.com")
 			},
 			wantCode: http.StatusTemporaryRedirect,
@@ -66,7 +63,7 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodGet,
 			url:      "/nonexistent",
 			body:     "",
-			setup:    func(s *storage.Storage) {},
+			setup:    func(s *app.Storage) {},
 			wantCode: http.StatusNotFound,
 			wantBody: "Short URL not found\n",
 		},
@@ -88,10 +85,10 @@ func TestEndpoints(t *testing.T) {
 
 			r := chi.NewRouter()
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-				endpoints.ShortenURL(w, r, storage, cfg.BaseURL)
+				app.ShortenURL(w, r, storage, cfg.BaseURL)
 			})
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-				endpoints.GetFullURL(w, r, storage)
+				app.GetFullURL(w, r, storage)
 			})
 
 			r.ServeHTTP(rec, req)
@@ -140,7 +137,7 @@ func TestGzipHandling(t *testing.T) {
 		}
 	})
 
-	ts := httptest.NewServer(middleware.GzipMiddleware(router))
+	ts := httptest.NewServer(app.GzipMiddleware(router))
 	defer ts.Close()
 
 	t.Run("Accept gzip-encoded request", func(t *testing.T) {

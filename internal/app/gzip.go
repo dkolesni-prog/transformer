@@ -1,11 +1,7 @@
-// Internal/app/middleware/gzip.go
-
-package middleware
+package app
 
 import (
 	"compress/gzip"
-	"errors"
-	"github.com/rs/zerolog/log"
 	"io"
 	"net/http"
 )
@@ -74,13 +70,7 @@ func GzipMiddleware(next http.Handler) http.Handler {
 				http.Error(w, "Failed to decode gzip", http.StatusBadRequest)
 				return
 			}
-			defer func(cr *compressReader) {
-				err := cr.Close()
-				if err != nil {
-					log.Error().Err(errors.New("Couldnt close compressReader"))
-
-				}
-			}(cr)
+			defer cr.Close()
 
 			r.Body = cr
 			r.Header.Del("Content-Encoding")
@@ -89,12 +79,7 @@ func GzipMiddleware(next http.Handler) http.Handler {
 		// Compress responses if client supports gzip
 		if r.Header.Get("Accept-Encoding") == "gzip" {
 			cw := newCompressWriter(w)
-			defer func(cw *compressWriter) {
-				err := cw.Close()
-				if err != nil {
-					log.Error().Err(errors.New("Couldnt close compressWriter"))
-				}
-			}(cw)
+			defer cw.Close()
 			w = cw
 			w.Header().Set("Content-Encoding", "gzip")
 		}

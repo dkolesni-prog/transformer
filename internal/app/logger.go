@@ -1,6 +1,6 @@
-// Internal/app/middleware/logger.go.
+// Internal/app/logger.go.
 
-package middleware
+package app
 
 import (
 	"bytes"
