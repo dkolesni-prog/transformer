@@ -1,15 +1,19 @@
+// Internal/store/dbStorage.go.
+
 package store
 
 import (
 	"context"
 	"errors"
+
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/dkolesni-prog/transformer/internal/app"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
+	"github.com/dkolesni-prog/transformer/internal/config"
+
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,20 +27,20 @@ type RDB struct {
 func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 	cfg, parseErr := pgxpool.ParseConfig(dsn)
 	if parseErr != nil {
-		middleware.Log.Printf("parse DSN error: " + parseErr.Error())
+		middleware.Log.Error().Err(parseErr).Msg("Parse DSN error")
 		return nil, errors.New("parse DSN error: " + parseErr.Error())
 	}
 
 	pool, poolErr := pgxpool.NewWithConfig(ctx, cfg)
 	if poolErr != nil {
-		middleware.Log.Printf("cannot create pgxpool: " + poolErr.Error())
+		middleware.Log.Error().Err(poolErr).Msg("cannot create pgxpoo")
 		return nil, errors.New("cannot create pgxpool: " + poolErr.Error())
 	}
 
 	pingErr := pool.Ping(ctx)
 	if pingErr != nil {
 		pool.Close()
-		middleware.Log.Printf("failed ping: " + pingErr.Error())
+		middleware.Log.Error().Err(pingErr).Msg("failed ping")
 		return nil, errors.New("failed ping: " + pingErr.Error())
 	}
 
@@ -55,34 +59,39 @@ CREATE TABLE IF NOT EXISTS short_urls (
 `
 	tx, beginErr := r.pool.Begin(ctx)
 	if beginErr != nil {
-		middleware.Log.Printf("cannot begin tx: " + beginErr.Error())
+		middleware.Log.Error().Err(beginErr).Msg("failed ping")
 		return errors.New("cannot begin tx: " + beginErr.Error())
 	}
-	defer tx.Rollback(ctx)
+	defer func(tx pgx.Tx, ctx context.Context) {
+		err := tx.Rollback(ctx)
+		if err != nil {
+			middleware.Log.Printf("cannot rollback: " + err.Error())
+		}
+	}(tx, ctx)
 
 	_, execErr := tx.Exec(ctx, schema)
 	if execErr != nil {
-		middleware.Log.Printf("cannot create table: " + execErr.Error())
+		middleware.Log.Error().Err(execErr).Msg("failed ping")
 		return errors.New("cannot create table: " + execErr.Error())
 	}
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		middleware.Log.Printf("cannot commit tx: " + commitErr.Error())
+		middleware.Log.Error().Err(commitErr).Msg("cannot commit tx: ")
 		return errors.New("cannot commit tx: " + commitErr.Error())
 	}
 
 	return nil
 }
 
-func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *app.Config) (string, error) {
+func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
-	for i := 0; i < maxRetries; i++ {
-		randomID, genErr := endpoints.RandStringRunes(randLen)
+	for range maxRetries {
+		randomID, genErr := helpers.RandStringRunes(randLen)
 		if genErr != nil {
-			middleware.Log.Printf("failed random ID: " + genErr.Error())
+			middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID")
 			return "", errors.New("failed random ID: " + genErr.Error())
 		}
 
@@ -100,7 +109,8 @@ VALUES ($1, $2)
 			continue
 		}
 
-		middleware.Log.Printf("db insert error: " + execErr.Error())
+		middleware.Log.Error().Err(execErr).Msg("Database insert error")
+
 		return "", errors.New("db insert error: " + execErr.Error())
 	}
 
@@ -109,22 +119,23 @@ VALUES ($1, $2)
 }
 
 // SaveBatch inserts multiple URLs in one transaction, each with random short ID, re-trying on conflict.
-func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *app.Config) ([]string, error) {
+func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	if len(urls) == 0 {
 		return nil, nil
 	}
 
 	tx, beginErr := r.pool.Begin(ctx)
 	if beginErr != nil {
-		middleware.Log.Printf("cannot begin tx: " + beginErr.Error())
-		return nil, errors.New("cannot begin tx: " + beginErr.Error())
+		middleware.Log.Error().Err(beginErr).Msg("Cannot begin transaction")
+		return nil, errors.New("cannot begin transaction")
 	}
 
-	defer func() {
-		// If we return an error at any point, rollback will be called automatically
-		// if we don't commit below.
-		tx.Rollback(ctx)
-	}()
+	defer func(tx pgx.Tx, ctx context.Context) {
+		err := tx.Rollback(ctx)
+		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			middleware.Log.Error().Err(err).Msg("Cannot rollback transaction")
+		}
+	}(tx, ctx)
 
 	results := make([]string, 0, len(urls))
 	for _, u := range urls {
@@ -132,10 +143,10 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *app.Config) (
 		const randLen = 8
 
 		var finalURL string
-		for i := 0; i < maxRetries; i++ {
-			randomID, genErr := endpoints.RandStringRunes(randLen)
+		for range maxRetries {
+			randomID, genErr := helpers.RandStringRunes(randLen)
 			if genErr != nil {
-				middleware.Log.Printf("failed random ID in batch: " + genErr.Error())
+				middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
 				return nil, errors.New("failed random ID: " + genErr.Error())
 			}
 
@@ -151,7 +162,7 @@ VALUES ($1, $2)
 			if isUniqueViolation(execErr) {
 				continue
 			}
-			middleware.Log.Printf("db insert error (batch): " + execErr.Error())
+			middleware.Log.Error().Err(execErr).Msg("DB insert error in batch")
 			return nil, errors.New("db insert error (batch): " + execErr.Error())
 		}
 
@@ -165,8 +176,8 @@ VALUES ($1, $2)
 
 	commitErr := tx.Commit(ctx)
 	if commitErr != nil {
-		middleware.Log.Printf("commit error in batch: " + commitErr.Error())
-		return nil, errors.New("commit error in batch: " + commitErr.Error())
+		middleware.Log.Error().Err(commitErr).Msg("Commit error in batch")
+		return nil, errors.New("commit error in batch")
 	}
 
 	return results, nil
@@ -176,33 +187,38 @@ func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {
 	var rawURL string
 	var deletedAt *time.Time
 
+	var ErrNoRowsFound = errors.New("no rows found for the provided short_id")
+
 	sqlSelect := `SELECT original_url, deleted_at FROM short_urls WHERE short_id = $1`
 	sErr := r.pool.QueryRow(ctx, sqlSelect, shortID).Scan(&rawURL, &deletedAt)
 	if sErr != nil {
 		if errors.Is(sErr, pgx.ErrNoRows) {
-			return nil, nil
+			middleware.Log.Info().Str("shortID", shortID).Msg("No rows found for short ID")
+			return nil, ErrNoRowsFound
 		}
-		middleware.Log.Printf("db select error: " + sErr.Error())
-		return nil, errors.New("db select error: " + sErr.Error())
+		middleware.Log.Error().Err(sErr).Str("shortID", shortID).Msg("Database query error")
+		return nil, errors.New("database query error")
 	}
+
 	if deletedAt != nil {
-		middleware.Log.Printf("short URL is marked deleted for: " + shortID)
+		middleware.Log.Warn().Str("shortID", shortID).Msg("Short URL is marked deleted")
 		return nil, errors.New("short URL is marked deleted")
 	}
 
 	parsed, pErr := url.Parse(rawURL)
 	if pErr != nil {
-		middleware.Log.Printf("invalid URL in DB: " + pErr.Error())
-		return nil, errors.New("invalid stored URL: " + pErr.Error())
+		middleware.Log.Error().Err(pErr).Str("rawURL", rawURL).Msg("Invalid URL in database")
+		return nil, errors.New("invalid stored URL")
 	}
+
 	return parsed, nil
 }
 
 func (r *RDB) Ping(ctx context.Context) error {
 	pErr := r.pool.Ping(ctx)
 	if pErr != nil {
-		middleware.Log.Printf("failed to ping db: " + pErr.Error())
-		return errors.New("ping error: " + pErr.Error())
+		middleware.Log.Error().Err(pErr).Msg("Failed to ping database")
+		return errors.New("ping error")
 	}
 	return nil
 }

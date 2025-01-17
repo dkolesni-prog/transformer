@@ -1,24 +1,29 @@
-// Internal/app/endpoints/helpers.go
+// Internal/app/helpers/helpers.go.
 
-package endpoints
+package helpers
 
 import (
 	"crypto/rand"
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"errors"
 	"math/big"
+
+	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 )
 
 func RandStringRunes(n int) (string, error) {
 	letterRunes := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
 	b := make([]rune, n)
+
 	for i := range b {
 		num, err := rand.Int(rand.Reader, big.NewInt(int64(len(letterRunes))))
 		if err != nil {
-			middleware.Log.Printf("Error generating random number: %v", err)
-			return "", err
+			wrappedErr := errors.New("error generating random number")
+			middleware.Log.Error().Err(err).Msg("RandStringRunes failed")
+			return "", wrappedErr
 		}
 		b[i] = letterRunes[num.Int64()]
 	}
+
 	return string(b), nil
 }
 

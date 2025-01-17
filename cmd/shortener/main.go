@@ -2,15 +2,19 @@ package main
 
 import (
 	"context"
+	"errors"
+
+	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
-	"github.com/dkolesni-prog/transformer/internal/store"
+
 	"net/http"
 	"time"
 
-	"github.com/dkolesni-prog/transformer/internal/app"
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/store"
 )
 
-var Version = "iter10"
+var Version = "iter12"
 
 func main() {
 	middleware.Initialize("info", Version)
@@ -23,20 +27,33 @@ func run() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
-	cfg := app.NewConfig()
+	cfg := config.NewConfig()
 
 	storage, err := newStorage(ctx, cfg)
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("Couldnt connect to storage")
+		middleware.Log.Error().Err(err).Msg("Could not connect to storage")
+		return err
 	}
-	defer storage.Close(ctx)
 
-	router := app.NewRouter(ctx, cfg, storage, Version)
+	defer func() {
+		if closeErr := storage.Close(ctx); closeErr != nil {
+			middleware.Log.Error().Err(closeErr).Msg("Could not close context")
+		}
+	}()
 
-	return http.ListenAndServe(cfg.RunAddr, router)
+	router := endpoints.NewRouter(ctx, cfg, storage, Version)
+
+	err = http.ListenAndServe(cfg.RunAddr, router)
+	if err != nil {
+		wrappedErr := errors.New("server failed to start")
+		middleware.Log.Error().Err(err).Msg("Server encountered an error")
+		return wrappedErr
+	}
+	return nil
 }
 
-func newStorage(ctx context.Context, cfg *app.Config) (store.Store, error) {
+//nolint:unparam  // Retaining error return for bc if removed. the main is red
+func newStorage(ctx context.Context, cfg *config.Config) (store.Store, error) {
 	middleware.Log.Info().
 		Str("address", cfg.RunAddr).
 		Str("Running server on", cfg.BaseURL).
@@ -51,11 +68,16 @@ func newStorage(ctx context.Context, cfg *app.Config) (store.Store, error) {
 			if bootErr == nil {
 				return rdb, nil
 			}
-			middleware.Log.Printf("DB bootstrap error: " + bootErr.Error())
+			middleware.Log.Error().
+				Err(bootErr).
+				Msg("DB bootstrap error")
 		} else {
-			middleware.Log.Printf("NewRDB error: " + err.Error())
+			middleware.Log.Error().
+				Err(err).
+				Msg("NewRDB error")
 		}
-		middleware.Log.Printf("Falling back from DB to file/memory")
+		middleware.Log.Warn().
+			Msg("Falling back from DB to file/memory storage")
 	}
 
 	if cfg.FileStoragePath != "" {

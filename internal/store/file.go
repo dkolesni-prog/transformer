@@ -1,4 +1,4 @@
-// Internal/app/store/file.go (expanded)
+// Internal/store/file.go.
 package store
 
 import (
@@ -6,12 +6,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/dkolesni-prog/transformer/internal/app"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"net/url"
 	"os"
 	"sync"
+
+	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 )
 
 type Record struct {
@@ -26,7 +27,7 @@ type Storage struct {
 	filePath          string
 }
 
-func NewStorage(cfg *app.Config) *Storage {
+func NewStorage(cfg *config.Config) *Storage {
 	s := &Storage{
 		mu:                &sync.Mutex{},
 		keyShortValuelong: make(map[string]string),
@@ -38,18 +39,18 @@ func NewStorage(cfg *app.Config) *Storage {
 	return s
 }
 
-// ----------------------------------------------
-// Satisfying store.Store interface
-// ----------------------------------------------
+// ----------------------------------------------.
+// Satisfying store.Store interface.
+// ----------------------------------------------.
 
-func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *app.Config) (string, error) {
+func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randValLength = 8
 	var shortURL string
 	var success bool
 
 	for i := range make([]int, maxRetries) {
-		randVal, err := endpoints.RandStringRunes(randValLength)
+		randVal, err := helpers.RandStringRunes(randValLength)
 		shortURL, success = s.SetIfAbsent(randVal, urlToSave.String())
 		if success {
 			break
@@ -59,12 +60,11 @@ func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *app.Config)
 		}
 	}
 
-	fullShortURL := endpoints.EnsureTrailingSlash(cfg.BaseURL) + shortURL
+	fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + shortURL
 	return fullShortURL, nil
 }
 
-// NEW: SaveBatch to insert multiple URLs. We loop over each one and call Save.
-func (s *Storage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *app.Config) ([]string, error) {
+func (s *Storage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	if len(urls) == 0 {
 		return nil, nil
 	}
@@ -104,9 +104,9 @@ func (s *Storage) Bootstrap(ctx context.Context) error {
 	return nil
 }
 
-// ----------------------------------------------
-// Helpers
-// ----------------------------------------------
+// ----------------------------------------------.
+// Helpers.
+// ----------------------------------------------.
 
 func (s *Storage) loadFromFile() error {
 	s.mu.Lock()
@@ -120,7 +120,12 @@ func (s *Storage) loadFromFile() error {
 		middleware.Log.Error().Err(err).Msg("error opening file")
 		return errors.New("open file: " + err.Error())
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			middleware.Log.Error().Err(err).Msg("error closing file")
+		}
+	}(file)
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -159,7 +164,12 @@ func (s *Storage) saveRecord(short, original string) error {
 		middleware.Log.Error().Err(err).Msg("open file error")
 		return errors.New("open file: " + err.Error())
 	}
-	defer file.Close()
+	defer func(file *os.File) {
+		err := file.Close()
+		if err != nil {
+			middleware.Log.Error().Err(err).Msg("close file error")
+		}
+	}(file)
 
 	if _, err := file.Write(data); err != nil {
 		middleware.Log.Error().Err(err).Msg("file write data")

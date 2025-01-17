@@ -1,12 +1,13 @@
-// Internal/app/config.go.
+// Internal/app/config/config.go.
 
-package app
+package config
 
 import (
 	"flag"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
 	"os"
 	"sync"
+
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 )
 
 type Config struct {
@@ -37,6 +38,6 @@ func NewConfig() *Config {
 	if envFilePath, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		cfg.FileStoragePath = envFilePath
 	}
-	cfg.BaseURL = endpoints.EnsureTrailingSlash(cfg.BaseURL)
+	cfg.BaseURL = helpers.EnsureTrailingSlash(cfg.BaseURL)
 	return &cfg
 }

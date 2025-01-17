@@ -3,16 +3,19 @@ package main
 import (
 	"bytes"
 	"compress/gzip"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
-	"github.com/dkolesni-prog/transformer/internal/store"
+	"context"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/dkolesni-prog/transformer/internal/app"
+	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
+	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/store"
+
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -21,16 +24,15 @@ import (
 // TestEndpoints tests the main endpoints of the URL shortening service.
 func TestEndpoints(t *testing.T) {
 	// Update with a valid file path for the test
-	storageFilePath := "test_storage.json"
-	cfg := app.NewConfig()
-	storage := store.NewStorage(storageFilePath)
+	cfg := config.NewConfig()
+	storage := store.NewStorage(cfg)
 
 	tests := []struct {
 		name       string
 		method     string
 		url        string
 		body       string
-		setup      func(*storage.Storage)
+		setup      func(*store.Storage)
 		wantCode   int
 		wantBody   string
 		wantHeader map[string]string
@@ -40,7 +42,7 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodPost,
 			url:      "/",
 			body:     "https://example.com",
-			setup:    func(s *storage.Storage) {},
+			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
 			wantBody: cfg.BaseURL,
 			wantHeader: map[string]string{
@@ -52,7 +54,7 @@ func TestEndpoints(t *testing.T) {
 			method: http.MethodGet,
 			url:    "/abcd1234",
 			body:   "",
-			setup: func(s *storage.Storage) {
+			setup: func(s *store.Storage) {
 				s.SetIfAbsent("abcd1234", "https://example.com")
 			},
 			wantCode: http.StatusTemporaryRedirect,
@@ -66,7 +68,7 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodGet,
 			url:      "/nonexistent",
 			body:     "",
-			setup:    func(s *storage.Storage) {},
+			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusNotFound,
 			wantBody: "Short URL not found\n",
 		},
@@ -88,10 +90,10 @@ func TestEndpoints(t *testing.T) {
 
 			r := chi.NewRouter()
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-				endpoints.ShortenURL(w, r, storage, cfg.BaseURL)
+				endpoints.ShortenURL(w, r, storage, cfg)
 			})
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-				endpoints.GetFullURL(w, r, storage)
+				endpoints.GetFullURL(context.Background(), w, r, storage)
 			})
 
 			r.ServeHTTP(rec, req)
@@ -119,27 +121,30 @@ func TestGzipHandling(t *testing.T) {
 	router := http.NewServeMux()
 	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		defer r.Body.Close()
 
-		if strings.Contains(string(body), "json") {
+		defer func() {
+			if err := r.Body.Close(); err != nil {
+				log.Println("Could not close request body:", err)
+			}
+		}()
+
+		switch {
+		case strings.Contains(string(body), "json"):
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, err := w.Write([]byte(`{"message": "JSON response"}`))
-			if err != nil {
+			if _, err := w.Write([]byte(`{"message": "JSON response"}`)); err != nil {
 				return
 			}
-		} else if strings.Contains(string(body), "html") {
+		case strings.Contains(string(body), "html"):
 			w.Header().Set("Content-Type", "text/html")
 			w.WriteHeader(http.StatusOK)
-			_, err := w.Write([]byte("<html><body>HTML response</body></html>"))
-			if err != nil {
+			if _, err := w.Write([]byte("<html><body>HTML response</body></html>")); err != nil {
 				return
 			}
-		} else {
+		default:
 			http.Error(w, "Unsupported content", http.StatusBadRequest)
 		}
 	})
-
 	ts := httptest.NewServer(middleware.GzipMiddleware(router))
 	defer ts.Close()
 
@@ -151,32 +156,45 @@ func TestGzipHandling(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gz.Close())
 
-		req, _ := http.NewRequest("POST", ts.URL, &gzippedBody)
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, &gzippedBody)
 		req.Header.Set("Content-Encoding", "gzip")
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Println("Could not close response body:", err)
+			}
+		}()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 	})
 
 	t.Run("Serve gzip-encoded response", func(t *testing.T) {
-		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"html"}`))
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(`{"content":"html"}`))
 		req.Header.Set("Content-Type", "text/html")
 		req.Header.Set("Accept-Encoding", "gzip")
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Println("Could not close response body:", err)
+			}
+		}()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
 
 		gzr, err := gzip.NewReader(resp.Body)
 		require.NoError(t, err)
-		defer gzr.Close()
+
+		defer func() {
+			if err := gzr.Close(); err != nil {
+				log.Println("Could not close gzip reader body:", err)
+			}
+		}()
 
 		body, err := io.ReadAll(gzr)
 		require.NoError(t, err)
@@ -184,12 +202,17 @@ func TestGzipHandling(t *testing.T) {
 	})
 
 	t.Run("Unsupported content type", func(t *testing.T) {
-		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"unknown"}`))
+		req, _ := http.NewRequest(http.MethodPost, ts.URL, strings.NewReader(`{"content":"unknown"}`))
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := http.DefaultClient.Do(req)
 		require.NoError(t, err)
-		defer resp.Body.Close()
+
+		defer func() {
+			if err := resp.Body.Close(); err != nil {
+				log.Println("Could not close response body:", err)
+			}
+		}()
 
 		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	})
