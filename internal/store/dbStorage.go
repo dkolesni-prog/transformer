@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS short_urls (
 	defer func(tx pgx.Tx, ctx context.Context) {
 		err := tx.Rollback(ctx)
 		if err != nil {
-			middleware.Log.Printf("cannot rollback: " + err.Error())
+			middleware.Log.Error().Err(err).Msg("cannot rollback")
 		}
 	}(tx, ctx)
 
