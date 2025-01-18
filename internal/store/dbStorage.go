@@ -89,90 +89,90 @@ func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) 
 	const maxRetries = 5
 	const randLen = 8
 
-	for range maxRetries {
+	for i := 0; i < maxRetries; i++ {
 		randomID, genErr := helpers.RandStringRunes(randLen)
 		if genErr != nil {
 			middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID")
-			return "", errors.New("failed random ID: " + genErr.Error())
+			return "", fmt.Errorf("failed to generate random ID: %w", genErr)
 		}
 
 		sqlInsert := `
 INSERT INTO short_urls (short_id, original_url) 
 VALUES ($1, $2)
-ON CONFLINCT (original_url) DO UPDATE SET short_id = short_urls.short_id
+ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
 RETURNING short_id;
 `
 		var shortID string
 		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
 		if err != nil {
 			middleware.Log.Error().Err(err).Msg("Database insert error")
-			return "", errors.New("db insert error: " + err.Error())
+			return "", fmt.Errorf("failed to insert into database: %w", err)
 		}
 		return ensureSlash(cfg.BaseURL) + shortID, nil
 	}
 
-	middleware.Log.Printf("failed to generate a unique short_id after retries")
+	middleware.Log.Warn().Msg("Failed to generate a unique short_id after retries")
 	return "", errors.New("failed to generate a unique short_id")
 }
 
-// SaveBatch inserts multiple URLs in one transaction, each with random short ID, re-trying on conflict.
-func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
-	if len(urls) == 0 {
-		return nil, nil
-	}
+func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL) ([]string, error) {
+	const maxRetries = 5
+	const randLen = 8
 
 	tx, beginErr := r.pool.Begin(ctx)
 	if beginErr != nil {
-		middleware.Log.Error().Err(beginErr).Msg("Cannot begin transaction")
-		return nil, errors.New("cannot begin transaction")
+		middleware.Log.Error().Err(beginErr).Msg("Failed to begin transaction")
+		return nil, fmt.Errorf("failed to begin transaction: %w", beginErr)
 	}
+
 	defer func() {
-		err := tx.Rollback(ctx)
-		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			middleware.Log.Error().Err(err).Msg("Cannot rollback transaction")
+		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
+			middleware.Log.Error().Err(err).Msg("Failed to rollback transaction")
 		}
 	}()
 
-	results := make([]string, 0, len(urls))
-	valueStrings := make([]string, 0, len(urls))
-	valueArgs := make([]interface{}, 0, len(urls)*2)
-
-	for i, u := range urls {
-		randomID, genErr := helpers.RandStringRunes(8)
-		if genErr != nil {
-			middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
-			return nil, errors.New("failed random ID: " + genErr.Error())
-		}
-		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
-		valueArgs = append(valueArgs, randomID, u.String())
-	}
-
-	sqlInsert := fmt.Sprintf(`
-        INSERT INTO short_urls (short_id, original_url)
-        VALUES %s
-        ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
-        RETURNING short_id;
-    `, strings.Join(valueStrings, ", "))
-
-	rows, execErr := tx.Query(ctx, sqlInsert, valueArgs...)
-	if execErr != nil {
-		middleware.Log.Error().Err(execErr).Msg("Batch insert error")
-		return nil, errors.New("batch insert error: " + execErr.Error())
-	}
-	defer rows.Close()
-
-	for rows.Next() {
+	var results []string
+	for _, urlToSave := range urls {
 		var shortID string
-		if scanErr := rows.Scan(&shortID); scanErr != nil {
-			middleware.Log.Error().Err(scanErr).Msg("Error scanning row")
-			return nil, scanErr
+		success := false
+
+		for i := 0; i < maxRetries; i++ {
+			randomID, genErr := helpers.RandStringRunes(randLen)
+			if genErr != nil {
+				middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
+				return nil, fmt.Errorf("failed to generate random ID in batch: %w", genErr)
+			}
+
+			sqlInsert := `
+INSERT INTO short_urls (short_id, original_url)
+VALUES ($1, $2)
+ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
+RETURNING short_id;
+`
+			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
+			if err == nil {
+				success = true
+				results = append(results, shortID)
+				break
+			}
+
+			if isUniqueViolation(err) {
+				continue
+			}
+
+			middleware.Log.Error().Err(err).Msg("Failed to insert URL in batch")
+			return nil, fmt.Errorf("failed to insert URL in batch: %w", err)
 		}
-		results = append(results, ensureSlash(cfg.BaseURL)+shortID)
+
+		if !success {
+			middleware.Log.Error().Str("url", urlToSave.String()).Msg("Failed to save URL after retries")
+			return nil, errors.New("failed to save URL after retries")
+		}
 	}
 
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		middleware.Log.Error().Err(commitErr).Msg("Transaction commit error")
-		return nil, errors.New("transaction commit error: " + commitErr.Error())
+		middleware.Log.Error().Err(commitErr).Msg("Failed to commit transaction")
+		return nil, fmt.Errorf("failed to commit transaction: %w", commitErr)
 	}
 
 	return results, nil

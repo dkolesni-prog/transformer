@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/url"
 	"sync"
 
@@ -46,43 +47,17 @@ func (m *MemoryStorage) Save(ctx context.Context, urlToSave *url.URL, cfg *confi
 	return "", errors.New("unexpected error generating short ID")
 }
 
-func (m *MemoryStorage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
-	if len(urls) == 0 {
-		return nil, nil
-	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	results := make([]string, 0, len(urls))
+func (m *MemoryStorage) SaveBatch(_ context.Context, urls []*url.URL) ([]string, error) {
+	ids := make([]string, 0, len(urls))
 	for _, u := range urls {
-		const randValLength = 8
-		var short string
-		var success bool
-
-		for i := 0; i < 5; i++ { // Retry mechanism
-			randVal, err := helpers.RandStringRunes(randValLength)
-			if err != nil {
-				return nil, errors.New("failed to generate unique short ID")
-			}
-
-			if _, exists := m.data[randVal]; !exists {
-				m.data[randVal] = u.String()
-				short = randVal
-				success = true
-				break
-			}
-		}
-
-		if !success {
-			return nil, errors.New("failed to save URL after retries")
-		}
-
-		fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + short
-		results = append(results, fullShortURL)
+		id := fmt.Sprintf("%x", len(m.data))
+		m.data[id] = u.String()
+		ids = append(ids, id)
 	}
-
-	return results, nil
+	if len(ids) != len(urls) {
+		return nil, errors.New("not all URLs have been saved")
+	}
+	return ids, nil
 }
 
 func (m *MemoryStorage) Load(ctx context.Context, id string) (*url.URL, error) {

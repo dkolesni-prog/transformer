@@ -1,11 +1,13 @@
-// Internal/store/file.go.
 package store
+
+// Internal/store/file.go.
 
 import (
 	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"sync"
@@ -64,50 +66,27 @@ func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Conf
 	return fullShortURL, nil
 }
 
-func (s *Storage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
-	if len(urls) == 0 {
-		return nil, nil
-	}
+func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL) ([]string, error) {
+	ids := make([]string, 0, len(urls))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	results := make([]string, 0, len(urls))
 	for _, u := range urls {
-		const randValLength = 8
-		var short string
-		var success bool
+		id := fmt.Sprintf("%x", len(s.keyShortValuelong))
+		s.keyShortValuelong[id] = u.String()
+		ids = append(ids, id)
 
-		for i := 0; i < 5; i++ { // Retry mechanism
-			randVal, err := helpers.RandStringRunes(randValLength)
-			if err != nil {
-				middleware.Log.Error().Err(err).Msg("Failed to generate random string")
-				return nil, errors.New("could not generate random string")
-			}
-
-			short, success = s.keyShortValuelong[randVal]
-			if !success {
-				s.keyShortValuelong[randVal] = u.String()
-				short = randVal
-				break
-			}
+		if err := s.saveRecord(id, u.String()); err != nil {
+			middleware.Log.Error().Err(err).Msg("Error saving batch record to file")
+			return nil, errors.New("error saving batch record to file")
 		}
-
-		if !success {
-			middleware.Log.Error().Msgf("Failed to save URL: %s after retries", u.String())
-			return nil, errors.New("failed to save URL after retries")
-		}
-
-		if err := s.saveRecord(short, u.String()); err != nil {
-			middleware.Log.Error().Err(err).Msg("Failed to save batch record")
-			return nil, err
-		}
-
-		fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + short
-		results = append(results, fullShortURL)
 	}
 
-	return results, nil
+	if len(ids) != len(urls) {
+		return nil, errors.New("not all URLs have been saved")
+	}
+	return ids, nil
 }
 
 func (s *Storage) Load(ctx context.Context, shortID string) (*url.URL, error) {
