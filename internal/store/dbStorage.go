@@ -62,12 +62,12 @@ CREATE TABLE IF NOT EXISTS short_urls (
 		middleware.Log.Error().Err(beginErr).Msg("failed ping")
 		return errors.New("cannot begin tx: " + beginErr.Error())
 	}
-	defer func(tx pgx.Tx, ctx context.Context) {
+	defer func() {
 		err := tx.Rollback(ctx)
-		if err != nil {
+		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
 			middleware.Log.Error().Err(err).Msg("cannot rollback")
 		}
-	}(tx, ctx)
+	}()
 
 	_, execErr := tx.Exec(ctx, schema)
 	if execErr != nil {
@@ -130,12 +130,12 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config
 		return nil, errors.New("cannot begin transaction")
 	}
 
-	defer func(tx pgx.Tx, ctx context.Context) {
+	defer func() {
 		err := tx.Rollback(ctx)
 		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			middleware.Log.Error().Err(err).Msg("Cannot rollback transaction")
+			middleware.Log.Error().Err(err).Msg("cannot rollback")
 		}
-	}(tx, ctx)
+	}()
 
 	results := make([]string, 0, len(urls))
 	for _, u := range urls {
