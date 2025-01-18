@@ -5,6 +5,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"net/url"
 	"strings"
@@ -98,20 +99,16 @@ func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) 
 		sqlInsert := `
 INSERT INTO short_urls (short_id, original_url) 
 VALUES ($1, $2)
+ON CONFLINCT (original_url) DO UPDATE SET short_id = short_urls.short_id
+RETURNING short_id;
 `
-		_, execErr := r.pool.Exec(ctx, sqlInsert, randomID, urlToSave.String())
-		if execErr == nil {
-			return ensureSlash(cfg.BaseURL) + randomID, nil
+		var shortID string
+		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
+		if err != nil {
+			middleware.Log.Error().Err(err).Msg("Database insert error")
+			return "", errors.New("db insert error: " + err.Error())
 		}
-
-		// If unique violation, try next random
-		if isUniqueViolation(execErr) {
-			continue
-		}
-
-		middleware.Log.Error().Err(execErr).Msg("Database insert error")
-
-		return "", errors.New("db insert error: " + execErr.Error())
+		return ensureSlash(cfg.BaseURL) + shortID, nil
 	}
 
 	middleware.Log.Printf("failed to generate a unique short_id after retries")
@@ -129,55 +126,53 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config
 		middleware.Log.Error().Err(beginErr).Msg("Cannot begin transaction")
 		return nil, errors.New("cannot begin transaction")
 	}
-
 	defer func() {
 		err := tx.Rollback(ctx)
 		if err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			middleware.Log.Error().Err(err).Msg("cannot rollback")
+			middleware.Log.Error().Err(err).Msg("Cannot rollback transaction")
 		}
 	}()
 
 	results := make([]string, 0, len(urls))
-	for _, u := range urls {
-		const maxRetries = 5
-		const randLen = 8
+	valueStrings := make([]string, 0, len(urls))
+	valueArgs := make([]interface{}, 0, len(urls)*2)
 
-		var finalURL string
-		for range maxRetries {
-			randomID, genErr := helpers.RandStringRunes(randLen)
-			if genErr != nil {
-				middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
-				return nil, errors.New("failed random ID: " + genErr.Error())
-			}
-
-			sqlInsert := `
-INSERT INTO short_urls (short_id, original_url)
-VALUES ($1, $2)
-`
-			_, execErr := tx.Exec(ctx, sqlInsert, randomID, u.String())
-			if execErr == nil {
-				finalURL = ensureSlash(cfg.BaseURL) + randomID
-				break
-			}
-			if isUniqueViolation(execErr) {
-				continue
-			}
-			middleware.Log.Error().Err(execErr).Msg("DB insert error in batch")
-			return nil, errors.New("db insert error (batch): " + execErr.Error())
+	for i, u := range urls {
+		randomID, genErr := helpers.RandStringRunes(8)
+		if genErr != nil {
+			middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
+			return nil, errors.New("failed random ID: " + genErr.Error())
 		}
-
-		if finalURL == "" {
-			middleware.Log.Printf("failed to generate a unique short_id in batch")
-			return nil, errors.New("failed to generate a unique short_id in batch")
-		}
-
-		results = append(results, finalURL)
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d)", i*2+1, i*2+2))
+		valueArgs = append(valueArgs, randomID, u.String())
 	}
 
-	commitErr := tx.Commit(ctx)
-	if commitErr != nil {
-		middleware.Log.Error().Err(commitErr).Msg("Commit error in batch")
-		return nil, errors.New("commit error in batch")
+	sqlInsert := fmt.Sprintf(`
+        INSERT INTO short_urls (short_id, original_url)
+        VALUES %s
+        ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
+        RETURNING short_id;
+    `, strings.Join(valueStrings, ", "))
+
+	rows, execErr := tx.Query(ctx, sqlInsert, valueArgs...)
+	if execErr != nil {
+		middleware.Log.Error().Err(execErr).Msg("Batch insert error")
+		return nil, errors.New("batch insert error: " + execErr.Error())
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var shortID string
+		if scanErr := rows.Scan(&shortID); scanErr != nil {
+			middleware.Log.Error().Err(scanErr).Msg("Error scanning row")
+			return nil, scanErr
+		}
+		results = append(results, ensureSlash(cfg.BaseURL)+shortID)
+	}
+
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		middleware.Log.Error().Err(commitErr).Msg("Transaction commit error")
+		return nil, errors.New("transaction commit error: " + commitErr.Error())
 	}
 
 	return results, nil

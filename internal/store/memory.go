@@ -50,14 +50,38 @@ func (m *MemoryStorage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *con
 	if len(urls) == 0 {
 		return nil, nil
 	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	results := make([]string, 0, len(urls))
 	for _, u := range urls {
-		short, err := m.Save(ctx, u, cfg)
-		if err != nil {
-			return nil, err
+		const randValLength = 8
+		var short string
+		var success bool
+
+		for i := 0; i < 5; i++ { // Retry mechanism
+			randVal, err := helpers.RandStringRunes(randValLength)
+			if err != nil {
+				return nil, errors.New("failed to generate unique short ID")
+			}
+
+			if _, exists := m.data[randVal]; !exists {
+				m.data[randVal] = u.String()
+				short = randVal
+				success = true
+				break
+			}
 		}
-		results = append(results, short)
+
+		if !success {
+			return nil, errors.New("failed to save URL after retries")
+		}
+
+		fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + short
+		results = append(results, fullShortURL)
 	}
+
 	return results, nil
 }
 

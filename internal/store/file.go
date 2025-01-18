@@ -68,15 +68,45 @@ func (s *Storage) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Co
 	if len(urls) == 0 {
 		return nil, nil
 	}
-	results := make([]string, 0, len(urls))
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	results := make([]string, 0, len(urls))
 	for _, u := range urls {
-		fullShort, err := s.Save(ctx, u, cfg)
-		if err != nil {
+		const randValLength = 8
+		var short string
+		var success bool
+
+		for i := 0; i < 5; i++ { // Retry mechanism
+			randVal, err := helpers.RandStringRunes(randValLength)
+			if err != nil {
+				middleware.Log.Error().Err(err).Msg("Failed to generate random string")
+				return nil, errors.New("could not generate random string")
+			}
+
+			short, success = s.keyShortValuelong[randVal]
+			if !success {
+				s.keyShortValuelong[randVal] = u.String()
+				short = randVal
+				break
+			}
+		}
+
+		if !success {
+			middleware.Log.Error().Msgf("Failed to save URL: %s after retries", u.String())
+			return nil, errors.New("failed to save URL after retries")
+		}
+
+		if err := s.saveRecord(short, u.String()); err != nil {
+			middleware.Log.Error().Err(err).Msg("Failed to save batch record")
 			return nil, err
 		}
-		results = append(results, fullShort)
+
+		fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + short
+		results = append(results, fullShortURL)
 	}
+
 	return results, nil
 }
 

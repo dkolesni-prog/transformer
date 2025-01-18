@@ -3,7 +3,9 @@ package endpoints
 // Internal/app/endpoints/endpoints.go.
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/config"
@@ -43,11 +45,72 @@ func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version s
 		Ping(w, r, s)
 	})
 
-	// r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
-	//	ShortenBatch(w, r, s, cfg)
-	// })
+	r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
+		ShortenBatch(w, r, s, cfg)
+	})
 
 	return r
+}
+
+func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
+	type BatchRequestItem struct {
+		CorrelationID string `json:"correlation_id"`
+		OriginalURL   string `json:"original_url"`
+	}
+	type BatchResponseItem struct {
+		CorrelationID string `json:"correlation_id"`
+		ShortURL      string `json:"short_url"`
+	}
+
+	var requests []BatchRequestItem
+	if err := json.NewDecoder(r.Body).Decode(&requests); err != nil {
+		middleware.Log.Error().Err(err).Msg("Failed to decode batch request")
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+	defer func() {
+		if err := r.Body.Close(); err != nil {
+			middleware.Log.Error().Err(err).Msg("Error closing request body")
+		}
+	}()
+
+	if len(requests) == 0 {
+		http.Error(w, "Empty batch", http.StatusBadRequest)
+		return
+	}
+
+	urls := make([]*url.URL, 0, len(requests))
+	correlationMap := make(map[*url.URL]string)
+
+	for _, req := range requests {
+		parsedURL, err := url.ParseRequestURI(req.OriginalURL)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Invalid URL in batch: %s", req.OriginalURL), http.StatusBadRequest)
+			return
+		}
+		urls = append(urls, parsedURL)
+		correlationMap[parsedURL] = req.CorrelationID
+	}
+
+	shortURLs, err := s.SaveBatch(r.Context(), urls, cfg)
+	if err != nil {
+		middleware.Log.Error().Err(err).Msg("Batch save failed")
+		return
+	}
+
+	responses := make([]BatchResponseItem, len(shortURLs))
+	for i, shortURL := range shortURLs {
+		responses[i] = BatchResponseItem{
+			CorrelationID: correlationMap[urls[i]],
+			ShortURL:      shortURL,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusCreated)
+	if err := json.NewEncoder(w).Encode(responses); err != nil {
+		middleware.Log.Error().Err(err).Msg("Failed to write batch response")
+	}
 }
 
 // ShortenURL handles a POST request with a raw long URL in the body.
@@ -85,6 +148,11 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 	// Let the store generate a short URL
 	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
 	if err != nil {
+		if strings.Contains(err.Error(), "db insert error") {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(shortURL))
+			return
+		}
 		middleware.Log.Error().Err(err).Msg("Error creating short URL")
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
@@ -136,6 +204,12 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 
 	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
 	if err != nil {
+		if strings.Contains(err.Error(), "db insert error") {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(shortURL))
+			return
+		}
+		middleware.Log.Error().Err(err).Msg("Error creating short URL")
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
