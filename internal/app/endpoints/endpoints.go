@@ -63,7 +63,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-	// defer r.Body.Close()
+
 	defer func() {
 		if err := r.Body.Close(); err != nil {
 			middleware.Log.Error().Err(err).Msg("Error closing request body")

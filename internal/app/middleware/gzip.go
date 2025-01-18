@@ -7,8 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
-
-	"github.com/rs/zerolog/log"
+	"strings"
 )
 
 const gzipencoding = "gzip" // whyisthereaneedtodoit? its name is longer than the string linter was complaining over
@@ -96,40 +95,40 @@ func (c *compressReader) Close() error {
 	return nil
 }
 
-// GzipMiddleware handles gzip compression/decompression for requests and responses.
-func GzipMiddleware(next http.Handler) http.Handler {
+func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Decompress gzipped request body
-		if r.Header.Get(ContentEncodingHeader) == gzipencoding {
-			cr, err := newCompressReader(r.Body)
-			if err != nil {
-				http.Error(w, "Failed to decode gzip", http.StatusBadRequest)
-				return
-			}
-			defer func(cr *compressReader) {
-				err := cr.Close()
-				if err != nil {
-					log.Error().Err(errors.New("couldnt close compressReader")).Msg("CompressReader close error")
-				}
-			}(cr)
+		ow := w
 
-			r.Body = cr
-			r.Header.Del(ContentEncodingHeader)
-		}
-
-		// Compress responses if client supports gzip
-		if r.Header.Get("Accept-Encoding") == gzipencoding {
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		supportsGzip := strings.Contains(acceptEncoding, "gzip")
+		if supportsGzip {
 			cw := newCompressWriter(w)
+			ow = cw
 			defer func(cw *compressWriter) {
 				err := cw.Close()
 				if err != nil {
-					log.Error().Err(errors.New("couldn't close compresswriter")).Msg("CompressWriter close error")
+					Log.Error().Err(err).Msg("compressWriter: error closing gzip writer")
 				}
 			}(cw)
-			w = cw
-			w.Header().Set(ContentEncodingHeader, gzipencoding)
 		}
 
-		next.ServeHTTP(w, r)
+		contentEncoding := r.Header.Get("Content-Encoding")
+		sendsGzip := strings.Contains(contentEncoding, "gzip")
+		if sendsGzip {
+			cr, err := newCompressReader(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			r.Body = cr
+			defer func(cr *compressReader) {
+				err := cr.Close()
+				if err != nil {
+					Log.Error().Err(err).Msg("compressReader: error closing gzip reader")
+				}
+			}(cr)
+		}
+
+		h.ServeHTTP(ow, r)
 	})
 }
