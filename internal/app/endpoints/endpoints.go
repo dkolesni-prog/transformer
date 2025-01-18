@@ -27,16 +27,16 @@ func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version s
 		ShortenURL(w, r, s, cfg)
 	})
 
+	r.Post("/api/shorten", func(w http.ResponseWriter, r *http.Request) {
+		ShortenURLJSON(w, r, s, cfg)
+	})
+
 	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
 		GetVersion(w, r, version)
 	})
 
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 		GetFullURL(ctx, w, r, s)
-	})
-
-	r.Post("/api/shorten", func(w http.ResponseWriter, r *http.Request) {
-		ShortenURLJSON(w, r, s, cfg)
 	})
 
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -48,21 +48,6 @@ func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version s
 	// })
 
 	return r
-}
-
-func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "Only use GET!", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("Content-Type", "text/plain")
-	w.WriteHeader(http.StatusOK)
-	_, err := w.Write([]byte(version))
-	if err != nil {
-		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
-		middleware.Log.Printf("Error writing version response: %v", err)
-		return
-	}
 }
 
 // ShortenURL handles a POST request with a raw long URL in the body.
@@ -166,6 +151,21 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 	_, err = w.Write(respJSON)
 	if err != nil {
 		middleware.Log.Error().Err(err).Msg("Error writing")
+	}
+}
+
+func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Only use GET!", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	_, err := w.Write([]byte(version))
+	if err != nil {
+		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
+		middleware.Log.Printf("Error writing version response: %v", err)
+		return
 	}
 }
 
