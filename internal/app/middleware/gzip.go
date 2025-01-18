@@ -12,6 +12,11 @@ import (
 const gzipencoding = "gzip" // whyisthereaneedtodoit? its name is longer than the string linter was complaining over
 const ContentEncodingHeader = "Content-Encoding"
 
+type CompressedReader interface {
+	Read(p []byte) (int, error)
+	Close() error
+}
+
 type compressWriter struct {
 	w  http.ResponseWriter
 	zw *gzip.Writer
@@ -61,15 +66,15 @@ func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 	}, nil
 }
 
-func (c compressReader) Read(p []byte) (n int, err error) {
+func (c *compressReader) Read(p []byte) (n int, err error) {
 	return c.zr.Read(p)
 }
 
 func (c *compressReader) Close() error {
-	if err := c.r.Close(); err != nil {
+	if err := c.zr.Close(); err != nil {
 		return err
 	}
-	return c.zr.Close()
+	return c.r.Close()
 }
 
 func GzipMiddleware(h http.Handler) http.Handler {
