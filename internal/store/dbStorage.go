@@ -89,7 +89,7 @@ func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) 
 	const maxRetries = 5
 	const randLen = 8
 
-	for i := 0; i < maxRetries; i++ {
+	for range maxRetries {
 		randomID, genErr := helpers.RandStringRunes(randLen)
 		if genErr != nil {
 			middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID")
@@ -115,7 +115,7 @@ RETURNING short_id;
 	return "", errors.New("failed to generate a unique short_id")
 }
 
-func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL) ([]string, error) {
+func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
@@ -152,7 +152,7 @@ RETURNING short_id;
 			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
 			if err == nil {
 				success = true
-				results = append(results, shortID)
+				results = append(results, ensureSlash(cfg.BaseURL)+shortID)
 				break
 			}
 

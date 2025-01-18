@@ -47,16 +47,21 @@ func (m *MemoryStorage) Save(ctx context.Context, urlToSave *url.URL, cfg *confi
 	return "", errors.New("unexpected error generating short ID")
 }
 
-func (m *MemoryStorage) SaveBatch(_ context.Context, urls []*url.URL) ([]string, error) {
+func (m *MemoryStorage) SaveBatch(_ context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
 	ids := make([]string, 0, len(urls))
 	for _, u := range urls {
 		id := fmt.Sprintf("%x", len(m.data))
 		m.data[id] = u.String()
-		ids = append(ids, id)
+		ids = append(ids, ensureSlash(cfg.BaseURL)+id)
 	}
+
 	if len(ids) != len(urls) {
 		return nil, errors.New("not all URLs have been saved")
 	}
+
 	return ids, nil
 }
 

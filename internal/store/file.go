@@ -66,7 +66,7 @@ func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Conf
 	return fullShortURL, nil
 }
 
-func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL) ([]string, error) {
+func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	ids := make([]string, 0, len(urls))
 
 	s.mu.Lock()
@@ -75,7 +75,7 @@ func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL) ([]string, error
 	for _, u := range urls {
 		id := fmt.Sprintf("%x", len(s.keyShortValuelong))
 		s.keyShortValuelong[id] = u.String()
-		ids = append(ids, id)
+		ids = append(ids, ensureSlash(cfg.BaseURL)+id)
 
 		if err := s.saveRecord(id, u.String()); err != nil {
 			middleware.Log.Error().Err(err).Msg("Error saving batch record to file")
