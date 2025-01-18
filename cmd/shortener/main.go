@@ -86,5 +86,11 @@ func newStorage(ctx context.Context, cfg *config.Config) (store.Store, error) {
 	}
 
 	memoryStore := store.NewMemoryStorage()
+	middleware.Log.Info().
+		Str("address", cfg.RunAddr).
+		Str("Running server on", cfg.BaseURL).
+		Str("file_storage", cfg.FileStoragePath).
+		Str("database_dsn", cfg.DatabaseDSN).
+		Msg("INITIALIZED STORAGE")
 	return memoryStore, nil
 }
