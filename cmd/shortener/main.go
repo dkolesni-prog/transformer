@@ -24,7 +24,7 @@ func main() {
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	cfg := config.NewConfig()
