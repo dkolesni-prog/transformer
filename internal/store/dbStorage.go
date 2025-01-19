@@ -104,11 +104,10 @@ RETURNING short_id;
 `
 		var shortID string
 		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
-		if err != nil {
-			middleware.Log.Error().Err(err).Msg("Database insert error")
-			return "", fmt.Errorf("failed to insert into database: %w", err)
+		if err == nil {
+			return ensureSlash(cfg.BaseURL) + shortID, nil
 		}
-		return ensureSlash(cfg.BaseURL) + shortID, nil
+		middleware.Log.Error().Err(err).Msg("Database insert error, retrying")
 	}
 
 	middleware.Log.Warn().Msg("Failed to generate a unique short_id after retries")
@@ -136,7 +135,7 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config
 		var shortID string
 		success := false
 
-		for i := 0; i < maxRetries; i++ {
+		for range maxRetries {
 			randomID, genErr := helpers.RandStringRunes(randLen)
 			if genErr != nil {
 				middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")

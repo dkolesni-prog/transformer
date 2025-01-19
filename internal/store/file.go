@@ -7,9 +7,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
@@ -73,7 +73,7 @@ func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL, cfg *config.Conf
 	defer s.mu.Unlock()
 
 	for _, u := range urls {
-		id := fmt.Sprintf("%x", len(s.keyShortValuelong))
+		id := strconv.Itoa(len(s.keyShortValuelong))
 		s.keyShortValuelong[id] = u.String()
 		ids = append(ids, ensureSlash(cfg.BaseURL)+id)
 

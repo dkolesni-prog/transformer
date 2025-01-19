@@ -3,7 +3,6 @@ package endpoints
 // Internal/app/endpoints/endpoints.go.
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -20,6 +19,7 @@ import (
 
 const errSomethingWentWrong = "Something went wrong"
 const internalServerError = "Internal Server Error"
+const contentType = "Content-Type"
 
 func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version string) http.Handler {
 	r := chi.NewRouter()
@@ -85,7 +85,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 	for _, req := range requests {
 		parsedURL, err := url.ParseRequestURI(req.OriginalURL)
 		if err != nil {
-			http.Error(w, fmt.Sprintf("Invalid URL in batch: %s", req.OriginalURL), http.StatusBadRequest)
+			http.Error(w, "Invalid URL in batch: "+req.OriginalURL, http.StatusBadRequest)
 			return
 		}
 		urls = append(urls, parsedURL)
@@ -106,7 +106,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		}
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set(contentType, "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(responses); err != nil {
 		middleware.Log.Error().Err(err).Msg("Failed to write batch response")
@@ -158,7 +158,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set(contentType, "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	if _, err := w.Write([]byte(shortURL)); err != nil {
 		middleware.Log.Error().Err(err).Msg("Error writing response")
@@ -220,7 +220,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		http.Error(w, "Failed to marshal JSON", http.StatusInternalServerError)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set(contentType, "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
 	_, err = w.Write(respJSON)
 	if err != nil {
@@ -233,7 +233,7 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 		http.Error(w, "Only use GET!", http.StatusMethodNotAllowed)
 		return
 	}
-	w.Header().Set("Content-Type", "text/plain")
+	w.Header().Set(contentType, "text/plain")
 	w.WriteHeader(http.StatusOK)
 	_, err := w.Write([]byte(version))
 	if err != nil {

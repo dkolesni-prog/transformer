@@ -38,7 +38,7 @@ func NewConfig() *Config {
 	if envFilePath, ok := os.LookupEnv("FILE_STORAGE_PATH"); ok {
 		cfg.FileStoragePath = envFilePath
 	}
-        if envDatabaseDSN, ok := os.LookupEnv("DATABASE_DSN"); ok {
+	if envDatabaseDSN, ok := os.LookupEnv("DATABASE_DSN"); ok {
 		cfg.DatabaseDSN = envDatabaseDSN
 	}
 	cfg.BaseURL = helpers.EnsureTrailingSlash(cfg.BaseURL)

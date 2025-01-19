@@ -4,6 +4,7 @@ package middleware
 
 import (
 	"compress/gzip"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -35,7 +36,12 @@ func (c *compressWriter) Header() http.Header {
 }
 
 func (c *compressWriter) Write(p []byte) (int, error) {
-	return c.zw.Write(p)
+	n, err := c.zw.Write(p)
+	if err != nil {
+		Log.Error().Err(err).Msg("Failed to write to gzip writer")
+		return n, errors.New("failed to write to gzip writer")
+	}
+	return n, nil
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
@@ -46,7 +52,11 @@ func (c *compressWriter) WriteHeader(statusCode int) {
 }
 
 func (c *compressWriter) Close() error {
-	return c.zw.Close()
+	if err := c.zw.Close(); err != nil {
+		Log.Error().Err(err).Msg("Failed to close gzip writer")
+		return errors.New("failed to close gzip writer")
+	}
+	return nil
 }
 
 type compressReader struct {
@@ -57,24 +67,31 @@ type compressReader struct {
 func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
-		return nil, err
+		Log.Error().Err(err).Msg("Failed to create gzip reader")
+		return nil, errors.New("failed to create gzip reader")
 	}
-
-	return &compressReader{
-		r:  r,
-		zr: zr,
-	}, nil
+	return &compressReader{zr: zr, r: r}, nil
 }
 
 func (c *compressReader) Read(p []byte) (n int, err error) {
-	return c.zr.Read(p)
+	n, err = c.zr.Read(p)
+	if err != nil {
+		Log.Error().Err(err).Msg("Failed to read from compressed reader")
+		return n, errors.New("failed to read from compressed reader")
+	}
+	return n, nil
 }
 
 func (c *compressReader) Close() error {
 	if err := c.zr.Close(); err != nil {
-		return err
+		Log.Error().Err(err).Msg("Failed to close compressed reader")
+		return errors.New("failed to close compressed reader")
 	}
-	return c.r.Close()
+	if err := c.r.Close(); err != nil {
+		Log.Error().Err(err).Msg("Failed to close underlying reader")
+		return errors.New("failed to close underlying reader")
+	}
+	return nil
 }
 
 func GzipMiddleware(h http.Handler) http.Handler {
