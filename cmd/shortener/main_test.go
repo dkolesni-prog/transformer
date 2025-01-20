@@ -162,7 +162,7 @@ func TestGzipHandling(t *testing.T) {
 
 	// Test case: Accept gzip-encoded request
 	t.Run("Accept gzip-encoded request", func(t *testing.T) {
-		body := `{"content":"json"}`
+		body := `{"url":"https://example.com"}`
 		var gzippedBody bytes.Buffer
 		gz := gzip.NewWriter(&gzippedBody)
 		_, err := gz.Write([]byte(body))
@@ -176,6 +176,11 @@ func TestGzipHandling(t *testing.T) {
 			Post("/api/shorten")
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
+
+		var result map[string]string
+		err = json.Unmarshal(resp.Body(), &result)
+		require.NoError(t, err)
+		assert.Contains(t, result["result"], cfg.BaseURL, "Short URL should start with base URL")
 	})
 
 	// Test case: Serve gzip-encoded response
@@ -188,7 +193,7 @@ func TestGzipHandling(t *testing.T) {
 			Post("/api/shorten")
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
-		assert.Contains(t, resp.Header().Get("Content-Encoding"), "gzip", "Expected Content-Encoding to be gzip")
+		assert.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected Content-Encoding to be gzip")
 
 		gzr, err := gzip.NewReader(bytes.NewReader(resp.Body()))
 		require.NoError(t, err)
