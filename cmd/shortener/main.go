@@ -54,10 +54,12 @@ func run() error {
 
 //nolint:unparam  // Retaining error return for bc if removed. the main is red
 func newStorage(ctx context.Context, cfg *config.Config) (store.Store, error) {
+
 	middleware.Log.Info().
 		Str("address", cfg.RunAddr).
 		Str("Running server on", cfg.BaseURL).
 		Str("file_storage", cfg.FileStoragePath).
+		Str("DB DSN is:", cfg.DatabaseDSN).
 		Msg("Initializing storage")
 
 	if cfg.DatabaseDSN != "" {
