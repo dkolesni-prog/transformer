@@ -178,12 +178,14 @@ RETURNING short_id;
 }
 
 func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {
+	middleware.Log.Info().Str("shortID", shortID).Msg("Starting Load operation")
 	var rawURL string
 	var deletedAt *time.Time
 
 	var ErrNoRowsFound = errors.New("no rows found for the provided short_id")
 
 	sqlSelect := `SELECT original_url, deleted_at FROM short_urls WHERE short_id = $1`
+	middleware.Log.Debug().Str("query", sqlSelect).Str("shortID", shortID).Msg("Executing query")
 	sErr := r.pool.QueryRow(ctx, sqlSelect, shortID).Scan(&rawURL, &deletedAt)
 	if sErr != nil {
 		if errors.Is(sErr, pgx.ErrNoRows) {
@@ -193,6 +195,12 @@ func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {
 		middleware.Log.Error().Err(sErr).Str("shortID", shortID).Msg("Database query error")
 		return nil, errors.New("database query error")
 	}
+
+	middleware.Log.Debug().
+		Str("shortID", shortID).
+		Str("rawURL", rawURL).
+		Interface("deletedAt", deletedAt).
+		Msg("Query succeeded, checking deleted status")
 
 	if deletedAt != nil {
 		middleware.Log.Warn().Str("shortID", shortID).Msg("Short URL is marked deleted")
@@ -204,7 +212,10 @@ func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {
 		middleware.Log.Error().Err(pErr).Str("rawURL", rawURL).Msg("Invalid URL in database")
 		return nil, errors.New("invalid stored URL")
 	}
-
+	middleware.Log.Info().
+		Str("shortID", shortID).
+		Str("parsedURL", parsed.String()).
+		Msg("Successfully loaded short URL")
 	return parsed, nil
 }
 
