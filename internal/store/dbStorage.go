@@ -181,12 +181,15 @@ func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {
 	middleware.Log.Info().Str("shortID", shortID).Msg("Starting Load operation")
 	var rawURL string
 	var deletedAt *time.Time
-
+	middleware.Log.Info().Str("shortID", shortID).Msg("1")
 	var ErrNoRowsFound = errors.New("no rows found for the provided short_id")
-
+	middleware.Log.Info().Str("shortID", shortID).Msg("2")
 	sqlSelect := `SELECT original_url, deleted_at FROM short_urls WHERE short_id = $1`
+	middleware.Log.Info().Str("shortID", shortID).Msg("3")
 	middleware.Log.Debug().Str("query", sqlSelect).Str("shortID", shortID).Msg("Executing query")
+	middleware.Log.Info().Str("shortID", shortID).Msg("4")
 	sErr := r.pool.QueryRow(ctx, sqlSelect, shortID).Scan(&rawURL, &deletedAt)
+	middleware.Log.Info().Str("shortID", shortID).Msg("5")
 	if sErr != nil {
 		if errors.Is(sErr, pgx.ErrNoRows) {
 			middleware.Log.Info().Str("shortID", shortID).Msg("No rows found for short ID")
