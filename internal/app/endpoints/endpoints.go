@@ -249,7 +249,7 @@ func GetFullURL(ctx context.Context, w http.ResponseWriter, r *http.Request, s s
 	long, ok := s.Load(ctx, id)
 	if ok != nil {
 		http.Error(w, "Short URL not found", http.StatusNotFound)
-		middleware.Log.Printf("Could not find a short URL")
+		middleware.Log.Error().Err(ok).Msg("Could not find a short URL")
 		return
 	}
 	http.Redirect(w, r, long.String(), http.StatusTemporaryRedirect)
