@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jackc/pgerrcode"
 
 	"net/url"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/helpers"
 
+	_ "github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -109,6 +111,22 @@ RETURNING short_id;
 		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
 		if err == nil {
 			return ensureSlash(cfg.BaseURL) + shortID, nil
+		}
+
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgerrcode.UniqueViolation {
+			// CONFLICT. Looking for the existing short id
+			sqlSelect := `
+SELECT short_id 
+FROM short_urls 
+WHERE original_url = $1;
+`
+			selectErr := r.pool.QueryRow(ctx, sqlSelect, urlToSave.String()).Scan(&shortID)
+			if selectErr != nil {
+				middleware.Log.Error().Err(selectErr).Msg("Failed to retreive existing shorturl after conflict")
+				return "", errors.New("failed to retrieve existing short URL")
+			}
+			return ensureSlash(cfg.BaseURL) + shortID, errors.New("conflict: URL already exists")
 		}
 		middleware.Log.Error().
 			Err(err).

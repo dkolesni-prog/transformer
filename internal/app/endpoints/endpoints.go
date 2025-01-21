@@ -149,9 +149,12 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 	// Let the store generate a short URL
 	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
 	if err != nil {
-		if strings.Contains(err.Error(), "db insert error") {
+		if strings.Contains(err.Error(), "conflict") {
+			w.Header().Set(contentType, "text/plain; charset=utf-8")
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(shortURL))
+			if _, writeErr := w.Write([]byte(shortURL)); writeErr != nil {
+				middleware.Log.Error().Err(writeErr).Msg("Error writing conflict response")
+			}
 			return
 		}
 		middleware.Log.Error().Err(err).Msg("Error creating short URL")
