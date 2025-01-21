@@ -197,7 +197,7 @@ func TestGzipHandling(t *testing.T) {
 		assert.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected Content-Encoding to be gzip")
 
 		gzr, err := gzip.NewReader(bytes.NewReader(resp.Body()))
-		require.NoError(t, err)
+		require.NoError(t, err, "Failed to create gzip reader") // (LINE 200)
 		defer func(gzr *gzip.Reader) {
 			err := gzr.Close()
 			if err != nil {

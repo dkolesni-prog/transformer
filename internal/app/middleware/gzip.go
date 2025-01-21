@@ -3,7 +3,6 @@
 package middleware
 
 import (
-	"bytes"
 	"compress/gzip"
 	"errors"
 	"io"
@@ -69,7 +68,7 @@ func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		Log.Error().Err(err).Msg("Failed to create gzip reader")
-		return nil, errors.New("failed to create gzip reader")
+		return nil, err
 	}
 	return &compressReader{zr: zr, r: r}, nil
 }
@@ -98,40 +97,35 @@ func (c *compressReader) Close() error {
 func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 
-		Log.Info().
-			Str("Content-Encoding", r.Header.Get(ContentEncodingHeader)).
-			Msg("GzipMiddleware processing request")
-
 		contentEncoding := r.Header.Get(ContentEncodingHeader)
 		if strings.Contains(contentEncoding, gzipencoding) {
-			Log.Info().Msg("Receiving gzipped content")
-
-			rawBytes, err := io.ReadAll(r.Body) // Read raw bytes for debugging
+			cr, err := newCompressReader(r.Body)
 			if err != nil {
-				Log.Error().Err(err).Msg("Failed to read raw gzipped body")
-				http.Error(w, "Invalid gzip stream", http.StatusBadRequest) //REMOVE IN PRODUCTION
-				return
-			}
-			Log.Info().Msgf("Raw gzipped body (hex): %x", rawBytes)
-
-			decompressedBody, err := gzip.NewReader(bytes.NewReader(rawBytes))
-
-			if err != nil {
-				Log.Error().Err(err).Msg("Failed to manually decompress gzipped body")
+				Log.Error().Err(err).Msg("Failed to create gzip reader for request")
 				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
 				return
 			}
-			decompressedData, err := io.ReadAll(decompressedBody)
+			defer func(cr *compressReader) {
+				err := cr.Close()
+				if err != nil {
+					Log.Error().Err(err).Msg("Failed to close compressReader")
+				}
+			}(cr)
+			r.Body = io.NopCloser(cr)
+		}
 
-			if err != nil {
-				Log.Error().Err(err).Msg("Failed to read manually decompressed body")
-				http.Error(w, "Decompression failed", http.StatusInternalServerError)
-				return
-			}
-			Log.Debug().Msgf("Decompressed body: %s", string(decompressedData))
-
-			r.Body = io.NopCloser(bytes.NewReader(decompressedData))
-
+		// Handle gzipped response bodies
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		if strings.Contains(acceptEncoding, gzipencoding) {
+			cw := newCompressWriter(w)
+			defer func(cw *compressWriter) {
+				err := cw.Close()
+				if err != nil {
+					Log.Error().Err(err).Msg("Failed to close compressWriter")
+				}
+			}(cw)
+			w = cw
+			w.Header().Set(ContentEncodingHeader, gzipencoding)
 		}
 
 		h.ServeHTTP(w, r)
