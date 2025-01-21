@@ -24,7 +24,7 @@ type compressWriter struct {
 }
 
 func newCompressWriter(w http.ResponseWriter) *compressWriter {
-	zw, _ := gzip.NewWriterLevel(w, gzip.BestCompression)
+	zw := gzip.NewWriter(w)
 	return &compressWriter{
 		w:  w,
 		zw: zw,
