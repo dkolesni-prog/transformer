@@ -31,12 +31,14 @@ func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 		middleware.Log.Error().Err(parseErr).Msg("Parse DSN error")
 		return nil, errors.New("parse DSN error: " + parseErr.Error())
 	}
+	middleware.Log.Info().Msg("DSN parsed successfully")
 
 	pool, poolErr := pgxpool.NewWithConfig(ctx, cfg)
 	if poolErr != nil {
 		middleware.Log.Error().Err(poolErr).Msg("cannot create pgxpoo")
 		return nil, errors.New("cannot create pgxpool: " + poolErr.Error())
 	}
+	middleware.Log.Info().Msg("pgxpool created successfully")
 
 	pingErr := pool.Ping(ctx)
 	if pingErr != nil {
@@ -44,6 +46,7 @@ func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 		middleware.Log.Error().Err(pingErr).Msg("failed ping")
 		return nil, errors.New("failed ping: " + pingErr.Error())
 	}
+	middleware.Log.Info().Msg("Ping successful")
 
 	return &RDB{pool: pool}, nil
 }
