@@ -39,7 +39,7 @@ func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version s
 	})
 
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-		GetFullURL(ctx, w, r, s)
+		GetFullURL(w, r, s)
 	})
 
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
@@ -244,11 +244,11 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 	}
 }
 
-func GetFullURL(ctx context.Context, w http.ResponseWriter, r *http.Request, s store.Store) {
+func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
 	middleware.Log.Info().Msg("GetFullURL entered execution")
 	id := chi.URLParam(r, "id")
 	middleware.Log.Info().Msg("chi relayed id")
-	long, err := s.Load(r.Context(), id)
+	long, err := s.Load(r.Context(), id) // It used to be s.Load(ctx, id)
 	middleware.Log.Info().Msg("Load operation was executed relayed id")
 	if err != nil {
 		wrappedErr := errors.New("failed to load short URL with ID: " + id + " - " + err.Error())

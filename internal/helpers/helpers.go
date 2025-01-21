@@ -39,6 +39,10 @@ func EnsureTrailingSlash(rawURL string) string {
 }
 
 func Classify(dsn string) string {
+	if dsn == "" {
+		return ""
+	}
+
 	sliceOfStringsSeparatedByColon := strings.Split(dsn, ":")
 	subSLiceSeparatedByAT := strings.Split(sliceOfStringsSeparatedByColon[2], "@")
 	secretToClassify := subSLiceSeparatedByAT[0]
