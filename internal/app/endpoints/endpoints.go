@@ -248,7 +248,7 @@ func GetFullURL(ctx context.Context, w http.ResponseWriter, r *http.Request, s s
 	middleware.Log.Info().Msg("GetFullURL entered execution")
 	id := chi.URLParam(r, "id")
 	middleware.Log.Info().Msg("chi relayed id")
-	long, err := s.Load(ctx, id)
+	long, err := s.Load(r.Context(), id)
 	middleware.Log.Info().Msg("Load operation was executed relayed id")
 	if err != nil {
 		wrappedErr := errors.New("failed to load short URL with ID: " + id + " - " + err.Error())
