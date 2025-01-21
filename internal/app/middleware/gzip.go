@@ -130,6 +130,8 @@ func GzipMiddleware(h http.Handler) http.Handler {
 			}
 			Log.Debug().Msgf("Decompressed body: %s", string(decompressedData))
 
+			r.Body = io.NopCloser(bytes.NewReader(decompressedData))
+
 		}
 
 		h.ServeHTTP(w, r)
