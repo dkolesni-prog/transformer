@@ -11,6 +11,7 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/store"
 
 	"encoding/json"
+	"errors"
 	"io"
 	"net/url"
 
@@ -244,12 +245,15 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 }
 
 func GetFullURL(ctx context.Context, w http.ResponseWriter, r *http.Request, s store.Store) {
+	middleware.Log.Info().Msg("GetFullURL entered execution")
 	id := chi.URLParam(r, "id")
-
-	long, ok := s.Load(ctx, id)
-	if ok != nil {
+	middleware.Log.Info().Msg("chi relayed id")
+	long, err := s.Load(ctx, id)
+	middleware.Log.Info().Msg("Load operation was executed relayed id")
+	if err != nil {
+		wrappedErr := errors.New("failed to load short URL with ID: " + id + " - " + err.Error())
+		middleware.Log.Error().Err(wrappedErr).Msg("Could not find a short URL")
 		http.Error(w, "Short URL not found", http.StatusNotFound)
-		middleware.Log.Error().Err(ok).Msg("Could not find a short URL")
 		return
 	}
 	http.Redirect(w, r, long.String(), http.StatusTemporaryRedirect)
