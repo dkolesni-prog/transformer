@@ -174,12 +174,12 @@ func TestGzipHandling(t *testing.T) {
 			SetHeader("Content-Type", "application/json").
 			SetBody(gzippedBody.Bytes()).
 			Post("/api/shorten")
-		require.NoError(t, err)
+		require.NoError(t, err, "Request failed")
 		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
 
 		var result map[string]string
 		err = json.Unmarshal(resp.Body(), &result)
-		require.NoError(t, err)
+		require.NoError(t, err, "Failed to unmarshal response")
 		assert.Contains(t, result["result"], cfg.BaseURL, "Short URL should start with base URL")
 	})
 
@@ -191,7 +191,8 @@ func TestGzipHandling(t *testing.T) {
 			SetHeader("Accept-Encoding", "gzip").
 			SetBody(body).
 			Post("/api/shorten")
-		require.NoError(t, err)
+		require.NoError(t, err, "Request failed")
+
 		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
 		assert.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected Content-Encoding to be gzip")
 
@@ -205,11 +206,11 @@ func TestGzipHandling(t *testing.T) {
 		}(gzr)
 
 		decompressedBody, err := io.ReadAll(gzr)
-		require.NoError(t, err)
+		require.NoError(t, err, "Failed to decompress gzip response")
 
 		var respData map[string]string
 		err = json.Unmarshal(decompressedBody, &respData)
-		require.NoError(t, err)
+		require.NoError(t, err, "Failed to unmarshal response")
 		assert.Contains(t, respData["result"], cfg.BaseURL, "Short URL should start with base URL")
 	})
 

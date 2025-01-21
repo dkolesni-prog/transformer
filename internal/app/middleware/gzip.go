@@ -3,6 +3,7 @@
 package middleware
 
 import (
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"io"
@@ -96,38 +97,38 @@ func (c *compressReader) Close() error {
 
 func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ow := w
 
-		acceptEncoding := r.Header.Get("Accept-Encoding")
-		supportsGzip := strings.Contains(acceptEncoding, gzipencoding)
-		if supportsGzip {
-			cw := newCompressWriter(w)
-			ow = cw
-			defer func(cw *compressWriter) {
-				err := cw.Close()
-				if err != nil {
-					Log.Error().Err(err).Msg("compressWriter: error closing gzip writer")
-				}
-			}(cw)
-		}
+		Log.Info().
+			Str("Content-Encoding", r.Header.Get(ContentEncodingHeader)).
+			Msg("GzipMiddleware processing request")
 
 		contentEncoding := r.Header.Get(ContentEncodingHeader)
-		sendsGzip := strings.Contains(contentEncoding, gzipencoding)
-		if sendsGzip {
+		if strings.Contains(contentEncoding, gzipencoding) {
+			Log.Info().Msg("Receiving gzipped content")
+
+			rawBytes, err := io.ReadAll(r.Body) // Read raw bytes for debugging
+			if err != nil {
+				Log.Error().Err(err).Msg("Failed to read raw gzipped body")
+				http.Error(w, "Invalid gzip stream", http.StatusBadRequest) //REMOVE IN PRODUCTION
+				return
+			}
+			Log.Debug().Msgf("Raw gzipped body (hex): %x", rawBytes)
+
+			r.Body = io.NopCloser(bytes.NewReader(rawBytes)) // reset body for decompression
+
 			cr, err := newCompressReader(r.Body)
 			if err != nil {
-				w.WriteHeader(http.StatusInternalServerError)
+				Log.Error().Err(err).Msg("Failed to create gzip reader")
+				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
 				return
 			}
 			r.Body = cr
 			defer func(cr *compressReader) {
-				err := cr.Close()
-				if err != nil {
-					Log.Error().Err(err).Msg("compressReader: error closing gzip reader")
+				if err := cr.Close(); err != nil {
+					Log.Error().Err(err).Msg("Failed to close compressed reader")
 				}
 			}(cr)
 		}
-
-		h.ServeHTTP(ow, r)
+		h.ServeHTTP(w, r)
 	})
 }
