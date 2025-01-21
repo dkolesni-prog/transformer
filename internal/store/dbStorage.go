@@ -110,7 +110,13 @@ RETURNING short_id;
 		if err == nil {
 			return ensureSlash(cfg.BaseURL) + shortID, nil
 		}
-		middleware.Log.Error().Err(err).Msg("Database insert error, retrying")
+		middleware.Log.Error().
+			Err(err).
+			Str("randomID", randomID).
+			Str("originalURL", urlToSave.String()).
+			Msg("Database insert error, retrying")
+
+		//middleware.Log.Error().Err(err).Msg("Database insert error, retrying")
 	}
 
 	middleware.Log.Warn().Msg("Failed to generate a unique short_id after retries")
