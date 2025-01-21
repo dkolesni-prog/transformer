@@ -114,21 +114,24 @@ func GzipMiddleware(h http.Handler) http.Handler {
 			}
 			Log.Info().Msgf("Raw gzipped body (hex): %x", rawBytes)
 
-			r.Body = io.NopCloser(bytes.NewReader(rawBytes)) // reset body for decompression
+			decompressedBody, err := gzip.NewReader(bytes.NewReader(rawBytes))
 
-			cr, err := newCompressReader(r.Body)
 			if err != nil {
-				Log.Error().Err(err).Msg("Failed to create gzip reader")
+				Log.Error().Err(err).Msg("Failed to manually decompress gzipped body")
 				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
 				return
 			}
-			r.Body = cr
-			defer func(cr *compressReader) {
-				if err := cr.Close(); err != nil {
-					Log.Error().Err(err).Msg("Failed to close compressed reader")
-				}
-			}(cr)
+			decompressedData, err := io.ReadAll(decompressedBody)
+
+			if err != nil {
+				Log.Error().Err(err).Msg("Failed to read manually decompressed body")
+				http.Error(w, "Decompression failed", http.StatusInternalServerError)
+				return
+			}
+			Log.Debug().Msgf("Decompressed body: %s", string(decompressedData))
+
 		}
+
 		h.ServeHTTP(w, r)
 	})
 }
