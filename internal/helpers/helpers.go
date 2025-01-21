@@ -46,6 +46,6 @@ func Classify(dsn string) string {
 	sliceOfStringsSeparatedByColon := strings.Split(dsn, ":")
 	subSLiceSeparatedByAT := strings.Split(sliceOfStringsSeparatedByColon[2], "@")
 	secretToClassify := subSLiceSeparatedByAT[0]
-	classifiedString := strings.Replace(dsn, secretToClassify, "♦️♦️♦️", 1)
+	classifiedString := strings.Replace(dsn, secretToClassify, "♦️", 1)
 	return classifiedString
 }
