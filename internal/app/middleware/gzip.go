@@ -3,7 +3,6 @@
 package middleware
 
 import (
-	"bytes"
 	"compress/gzip"
 	"errors"
 	"io"
@@ -11,21 +10,17 @@ import (
 	"strings"
 )
 
-const gzipencoding = "gzip" // whyisthereaneedtodoit? its name is longer than the string linter was complaining over
-const ContentEncodingHeader = "Content-Encoding"
-
-type CompressedReader interface {
-	Read(p []byte) (int, error)
-	Close() error
-}
-
 type compressWriter struct {
 	w  http.ResponseWriter
 	zw *gzip.Writer
 }
 
 func newCompressWriter(w http.ResponseWriter) *compressWriter {
-	zw := gzip.NewWriter(w)
+	zw, err := gzip.NewWriterLevel(w, gzip.BestCompression)
+	if err != nil {
+		Log.Error().Err(err).Msg("Failed to create gzip writer")
+		return nil
+	}
 	return &compressWriter{
 		w:  w,
 		zw: zw,
@@ -37,23 +32,16 @@ func (c *compressWriter) Header() http.Header {
 }
 
 func (c *compressWriter) Write(p []byte) (int, error) {
-	if c.zw == nil {
-		// Write directly for non-compressed responses
-		return c.w.Write(p)
-	}
 	n, err := c.zw.Write(p)
 	if err != nil {
 		Log.Error().Err(err).Msg("Failed to write to gzip writer")
-		return n, errors.New("failed to write to gzip writer")
 	}
-	return n, nil
+	return n, err
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
-	if statusCode >= 300 {
-		c.zw = nil
-	} else {
-		c.w.Header().Set(ContentEncodingHeader, gzipencoding)
+	if statusCode < 300 {
+		c.w.Header().Set("Content-Encoding", "gzip")
 	}
 	c.w.WriteHeader(statusCode)
 }
@@ -61,7 +49,7 @@ func (c *compressWriter) WriteHeader(statusCode int) {
 func (c *compressWriter) Close() error {
 	if err := c.zw.Close(); err != nil {
 		Log.Error().Err(err).Msg("Failed to close gzip writer")
-		return errors.New("failed to close gzip writer")
+		return err
 	}
 	return nil
 }
@@ -77,95 +65,74 @@ func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 		Log.Error().Err(err).Msg("Failed to create gzip reader")
 		return nil, err
 	}
-	return &compressReader{zr: zr, r: r}, nil
+	return &compressReader{
+		r:  r,
+		zr: zr,
+	}, nil
 }
 
-func (c *compressReader) Read(p []byte) (n int, err error) {
-	n, err = c.zr.Read(p)
-	if err != nil {
-		Log.Error().Err(err).Msg("Failed to read from compressed reader")
-		return n, errors.New("failed to read from compressed reader")
+func (c *compressReader) Read(p []byte) (int, error) {
+	n, err := c.zr.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) {
+		Log.Error().Err(err).Msg("Failed to read from gzip reader")
 	}
-	return n, nil
+	return n, err
 }
 
 func (c *compressReader) Close() error {
 	if err := c.zr.Close(); err != nil {
-		Log.Error().Err(err).Msg("Failed to close compressed reader")
-		return errors.New("failed to close compressed reader")
+		Log.Error().Err(err).Msg("Failed to close gzip reader")
+		return err
 	}
 	if err := c.r.Close(); err != nil {
 		Log.Error().Err(err).Msg("Failed to close underlying reader")
-		return errors.New("failed to close underlying reader")
+		return err
 	}
 	return nil
 }
 
-//func GzipMiddleware(h http.Handler) http.Handler {
-//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-//
-//		contentEncoding := r.Header.Get(ContentEncodingHeader)
-//		if strings.Contains(contentEncoding, gzipencoding) {
-//			cr, err := newCompressReader(r.Body)
-//			if err != nil {
-//				Log.Error().Err(err).Msg("Failed to create gzip reader for request")
-//				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
-//				return
-//			}
-//			defer func(cr *compressReader) {
-//				err := cr.Close()
-//				if err != nil {
-//					Log.Error().Err(err).Msg("Failed to close compressReader")
-//				}
-//			}(cr)
-//			r.Body = io.NopCloser(cr)
-//		}
-//
-//		// Handle gzipped response bodies
-//		acceptEncoding := r.Header.Get("Accept-Encoding")
-//		if strings.Contains(acceptEncoding, gzipencoding) {
-//			cw := newCompressWriter(w)
-//			defer func(cw *compressWriter) {
-//				err := cw.Close()
-//				if err != nil {
-//					Log.Error().Err(err).Msg("Failed to close compressWriter")
-//				}
-//			}(cw)
-//			w = cw
-//			w.Header().Set(ContentEncodingHeader, gzipencoding)
-//		}
-//
-//		h.ServeHTTP(w, r)
-//	})
-//}
-
 func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		Log.Info().Msg("Entering GzipMiddleware")
+		Log.Info().
+			Str("Accept-Encoding", r.Header.Get("Accept-Encoding")).
+			Str("Content-Encoding", r.Header.Get("Content-Encoding")).
+			Msg("Processing gzip middleware")
 
-		contentEncoding := r.Header.Get(ContentEncodingHeader)
-		if strings.Contains(contentEncoding, gzipencoding) {
-			Log.Info().Msg("Detected gzip-encoded request")
+		ow := w
+
+		acceptEncoding := r.Header.Get("Accept-Encoding")
+		if strings.Contains(acceptEncoding, "gzip") {
+			Log.Info().Msg("Client supports gzip encoding; wrapping response writer")
+			cw := newCompressWriter(w)
+			if cw == nil {
+				http.Error(w, "Failed to create gzip writer", http.StatusInternalServerError)
+				return
+			}
+			ow = cw
+			defer func() {
+				if err := cw.Close(); err != nil {
+					Log.Error().Err(err).Msg("Error closing compressWriter")
+				}
+			}()
+		}
+
+		contentEncoding := r.Header.Get("Content-Encoding")
+		if strings.Contains(contentEncoding, "gzip") {
+			Log.Info().Msg("Request body is gzip-encoded; decompressing")
 			cr, err := newCompressReader(r.Body)
 			if err != nil {
 				Log.Error().Err(err).Msg("Failed to create gzip reader for request")
 				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
 				return
 			}
-			defer func(cr *compressReader) {
+			r.Body = cr
+			defer func() {
 				if err := cr.Close(); err != nil {
-					Log.Error().Err(err).Msg("Failed to close compressReader")
+					Log.Error().Err(err).Msg("Error closing compressReader")
 				}
-			}(cr)
-
-			// Log raw decompressed body for debugging
-			decompressedBody, _ := io.ReadAll(cr)
-			Log.Info().Msgf("Decompressed request body: %s", string(decompressedBody))
-
-			// Replace the request body
-			r.Body = io.NopCloser(bytes.NewReader(decompressedBody))
+			}()
 		}
 
-		h.ServeHTTP(w, r)
+		h.ServeHTTP(ow, r)
 	})
 }
