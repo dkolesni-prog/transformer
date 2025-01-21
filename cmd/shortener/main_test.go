@@ -110,7 +110,7 @@ func TestEndpoints(t *testing.T) {
 				endpoints.ShortenURL(w, r, storage, cfg)
 			})
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-				endpoints.GetFullURL(context.Background(), w, r, storage)
+				endpoints.GetFullURL(w, r, storage)
 			})
 
 			r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
