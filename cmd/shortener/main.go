@@ -15,17 +15,17 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/store"
 )
 
-var Version = "iter12"
+const version = "iter12"
 
 func main() {
-	middleware.Initialize("info", Version)
+	middleware.Initialize("info", version)
 	if err := run(); err != nil {
 		middleware.Log.Info().Err(err).Msg("Failed to run server")
 	}
 }
 
 func run() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	cfg := config.NewConfig()
@@ -42,7 +42,7 @@ func run() error {
 		}
 	}()
 
-	router := endpoints.NewRouter(ctx, cfg, storage, Version)
+	router := endpoints.NewRouter(ctx, cfg, storage, version)
 
 	err = http.ListenAndServe(cfg.RunAddr, router)
 	if err != nil {
