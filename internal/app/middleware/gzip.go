@@ -3,6 +3,7 @@
 package middleware
 
 import (
+	"bytes"
 	"compress/gzip"
 	"errors"
 	"io"
@@ -36,6 +37,10 @@ func (c *compressWriter) Header() http.Header {
 }
 
 func (c *compressWriter) Write(p []byte) (int, error) {
+	if c.zw == nil {
+		// Write directly for non-compressed responses
+		return c.w.Write(p)
+	}
 	n, err := c.zw.Write(p)
 	if err != nil {
 		Log.Error().Err(err).Msg("Failed to write to gzip writer")
@@ -45,7 +50,9 @@ func (c *compressWriter) Write(p []byte) (int, error) {
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
-	if statusCode < 300 {
+	if statusCode >= 300 {
+		c.zw = nil
+	} else {
 		c.w.Header().Set(ContentEncodingHeader, gzipencoding)
 	}
 	c.w.WriteHeader(statusCode)
@@ -94,11 +101,51 @@ func (c *compressReader) Close() error {
 	return nil
 }
 
+//func GzipMiddleware(h http.Handler) http.Handler {
+//	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+//
+//		contentEncoding := r.Header.Get(ContentEncodingHeader)
+//		if strings.Contains(contentEncoding, gzipencoding) {
+//			cr, err := newCompressReader(r.Body)
+//			if err != nil {
+//				Log.Error().Err(err).Msg("Failed to create gzip reader for request")
+//				http.Error(w, "Invalid gzip stream", http.StatusBadRequest)
+//				return
+//			}
+//			defer func(cr *compressReader) {
+//				err := cr.Close()
+//				if err != nil {
+//					Log.Error().Err(err).Msg("Failed to close compressReader")
+//				}
+//			}(cr)
+//			r.Body = io.NopCloser(cr)
+//		}
+//
+//		// Handle gzipped response bodies
+//		acceptEncoding := r.Header.Get("Accept-Encoding")
+//		if strings.Contains(acceptEncoding, gzipencoding) {
+//			cw := newCompressWriter(w)
+//			defer func(cw *compressWriter) {
+//				err := cw.Close()
+//				if err != nil {
+//					Log.Error().Err(err).Msg("Failed to close compressWriter")
+//				}
+//			}(cw)
+//			w = cw
+//			w.Header().Set(ContentEncodingHeader, gzipencoding)
+//		}
+//
+//		h.ServeHTTP(w, r)
+//	})
+//}
+
 func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Log.Info().Msg("Entering GzipMiddleware")
 
 		contentEncoding := r.Header.Get(ContentEncodingHeader)
 		if strings.Contains(contentEncoding, gzipencoding) {
+			Log.Info().Msg("Detected gzip-encoded request")
 			cr, err := newCompressReader(r.Body)
 			if err != nil {
 				Log.Error().Err(err).Msg("Failed to create gzip reader for request")
@@ -106,26 +153,17 @@ func GzipMiddleware(h http.Handler) http.Handler {
 				return
 			}
 			defer func(cr *compressReader) {
-				err := cr.Close()
-				if err != nil {
+				if err := cr.Close(); err != nil {
 					Log.Error().Err(err).Msg("Failed to close compressReader")
 				}
 			}(cr)
-			r.Body = io.NopCloser(cr)
-		}
 
-		// Handle gzipped response bodies
-		acceptEncoding := r.Header.Get("Accept-Encoding")
-		if strings.Contains(acceptEncoding, gzipencoding) {
-			cw := newCompressWriter(w)
-			defer func(cw *compressWriter) {
-				err := cw.Close()
-				if err != nil {
-					Log.Error().Err(err).Msg("Failed to close compressWriter")
-				}
-			}(cw)
-			w = cw
-			w.Header().Set(ContentEncodingHeader, gzipencoding)
+			// Log raw decompressed body for debugging
+			decompressedBody, _ := io.ReadAll(cr)
+			Log.Info().Msgf("Decompressed request body: %s", string(decompressedBody))
+
+			// Replace the request body
+			r.Body = io.NopCloser(bytes.NewReader(decompressedBody))
 		}
 
 		h.ServeHTTP(w, r)
