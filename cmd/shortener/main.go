@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 	"github.com/dkolesni-prog/transformer/internal/store"
 )
 
@@ -59,7 +60,7 @@ func newStorage(ctx context.Context, cfg *config.Config) (store.Store, error) {
 		Str("address", cfg.RunAddr).
 		Str("Running server on", cfg.BaseURL).
 		Str("file_storage", cfg.FileStoragePath).
-		Str("DB DSN is:", cfg.DatabaseDSN).
+		Str("DB DSN is:", helpers.Classify(cfg.DatabaseDSN)).
 		Msg("Initializing storage")
 
 	if cfg.DatabaseDSN != "" {

@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"math/big"
+	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 )
@@ -35,4 +36,12 @@ func EnsureTrailingSlash(rawURL string) string {
 		return rawURL + "/"
 	}
 	return rawURL
+}
+
+func Classify(dsn string) string {
+	sliceOfStringsSeparatedByColon := strings.Split(dsn, ":")
+	subSLiceSeparatedByAT := strings.Split(sliceOfStringsSeparatedByColon[2], "@")
+	secretToClassify := subSLiceSeparatedByAT[0]
+	classifiedString := strings.Replace(dsn, secretToClassify, "♦️♦️♦️", 1)
+	return classifiedString
 }
