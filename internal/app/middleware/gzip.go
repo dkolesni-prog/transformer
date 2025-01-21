@@ -112,7 +112,7 @@ func GzipMiddleware(h http.Handler) http.Handler {
 				http.Error(w, "Invalid gzip stream", http.StatusBadRequest) //REMOVE IN PRODUCTION
 				return
 			}
-			Log.Debug().Msgf("Raw gzipped body (hex): %x", rawBytes)
+			Log.Info().Msgf("Raw gzipped body (hex): %x", rawBytes)
 
 			r.Body = io.NopCloser(bytes.NewReader(rawBytes)) // reset body for decompression
 
