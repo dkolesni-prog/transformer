@@ -209,9 +209,12 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 
 	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
 	if err != nil {
-		if strings.Contains(err.Error(), "db insert error") {
+		if strings.Contains(err.Error(), "conflict") {
+			response := map[string]string{"result": shortURL}
+			respJSON, _ := json.Marshal(response)
+			w.Header().Set(contentType, "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(shortURL))
+			_, _ = w.Write(respJSON)
 			return
 		}
 		middleware.Log.Error().Err(err).Msg("Error creating short URL")
