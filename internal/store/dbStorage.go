@@ -102,7 +102,7 @@ func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) 
 		sqlInsert := `
 INSERT INTO short_urls (short_id, original_url) 
 VALUES ($1, $2)
-ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
+ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
 `
 		var shortID string
@@ -148,7 +148,7 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config
 			sqlInsert := `
 INSERT INTO short_urls (short_id, original_url)
 VALUES ($1, $2)
-ON CONFLICT (original_url) DO UPDATE SET short_id = EXCLUDED.short_id
+ON CONFLICT (original_url) DO DO NOTHING
 RETURNING short_id;
 `
 			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
