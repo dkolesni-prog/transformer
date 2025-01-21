@@ -189,6 +189,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
+		middleware.Log.Error().Err(err).Msg("Failed to parse json")
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
