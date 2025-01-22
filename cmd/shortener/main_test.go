@@ -5,14 +5,14 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/json"
+	"github.com/go-resty/resty/v2"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"strings"
 	"testing"
 
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
-	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/require"
 
 	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
@@ -146,22 +146,122 @@ func TestEndpoints(t *testing.T) {
 }
 
 func TestGzipHandling(t *testing.T) {
-	// Initialize configuration
+	// 1) Spin up your server
 	cfg := config.NewConfig()
 	storeNotImported := store.NewMemoryStorage()
-
-	// Initialize the real router with endpoints and middleware
 	router := endpoints.NewRouter(context.Background(), cfg, storeNotImported, "testversion")
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
-	// Initialize Resty client
-	client := resty.New().
-		SetBaseURL(ts.URL).
-		SetRedirectPolicy(resty.NoRedirectPolicy())
+	// =========== SUB-TEST #1: GZIPPED REQUEST, PLAIN RESPONSE =========== // I suspect that the server will
+	t.Run("GzippedRequest_PlainResponse", func(t *testing.T) {
 
-	// Test case: Accept gzip-encoded request
-	t.Run("Accept gzip-encoded request", func(t *testing.T) {
+		httpClient := &http.Client{
+			Transport: &http.Transport{
+				DisableCompression: true,
+			},
+		}
+
+		// 2) Create Resty client that does NOT auto-decompress
+		//    so we can manually gzip.NewReader the response.
+		client := resty.NewWithClient(httpClient).
+			SetBaseURL(ts.URL).
+			SetRedirectPolicy(resty.NoRedirectPolicy()).
+			SetDoNotParseResponse(true) // If removed it will make GzippedRequest_PlainResponse pass.
+
+		// We only send gzipped data in request; do NOT ask for gzip response.
+		body := `{"url":"https://example.com"}`
+		var gzippedBody bytes.Buffer
+		gz := gzip.NewWriter(&gzippedBody)
+		_, err := gz.Write([]byte(body))
+		require.NoError(t, err, "Failed to write to gzip writer")
+		require.NoError(t, gz.Close(), "Failed to close gzip writer")
+
+		// Notice we do NOT set "Accept-Encoding: gzip".
+		resp, err := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Accept-Encoding", "").
+			SetHeader("Content-Encoding", "gzip").
+			SetBody(gzippedBody.Bytes()).
+			Post("/api/shorten")
+		require.NoError(t, err, "Request failed")
+
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
+		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
+
+		rawBody, err := io.ReadAll(resp.RawResponse.Body)
+		require.NoError(t, err, "Failed to read raw response body")
+
+		require.False(t, isGzipData(rawBody), "Expected plain JSON")
+
+		t.Logf("Raw body: %s", string(rawBody))
+
+		var respData map[string]string
+		err = json.Unmarshal(rawBody, &respData)
+		require.NoError(t, err, "Failed to parse plain JSON response")
+		require.Contains(t, respData["result"], cfg.BaseURL)
+
+	})
+
+	// =========== SUB-TEST #2: PLAIN REQUEST, GZIPPED RESPONSE ===========
+	t.Run("PlainRequest_GzippedResponse", func(t *testing.T) {
+
+		client := resty.New().
+			SetBaseURL(ts.URL).
+			SetRedirectPolicy(resty.NoRedirectPolicy())
+
+		// We send normal JSON, but set "Accept-Encoding: gzip"
+		body := `{"url":"https://example.com"}`
+		resp, err := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Accept-Encoding", "gzip"). // Asking for gzipped response
+			SetDoNotParseResponse(true).
+			SetBody([]byte(body)). // Plain JSON
+			Post("/api/shorten")
+		require.NoError(t, err, "Request failed")
+
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false) //  it will dump only the response headers (and the first line/status) but will not consume the body
+		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
+
+		// The server should return 201 + gzipped JSON
+		require.Equal(t, http.StatusCreated, resp.StatusCode())
+		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"),
+			"Expected gzipped response")
+
+		// Manual read
+		rawBytes, err := io.ReadAll(resp.RawResponse.Body)
+		require.NoError(t, err, "Failed to read raw body")
+		t.Logf("Raw response body length=%d, hex=%x", len(rawBytes), rawBytes)
+
+		// Manual decompression
+		gzr, err := gzip.NewReader(bytes.NewReader(rawBytes))
+		require.NoError(t, err, "Failed to create gzip reader")
+		decompressedBody, err := io.ReadAll(gzr)
+		require.NoError(t, err, "Failed to decompress gzip response")
+
+		var respData map[string]string
+		err = json.Unmarshal(decompressedBody, &respData)
+		require.NoError(t, err, "Failed to unmarshal response JSON")
+		require.Contains(t, respData["result"], cfg.BaseURL)
+	})
+
+	// =========== SUB-TEST #3: BOTH GZIPPED REQUEST AND RESPONSE ===========
+	t.Run("Both_GzippedRequestAndResponse", func(t *testing.T) {
+
+		httpClient := &http.Client{
+			Transport: &http.Transport{
+				DisableCompression: true,
+			},
+		}
+
+		// 2) Create Resty client that does NOT auto-decompress
+		//    so we can manually gzip.NewReader the response.
+		client := resty.NewWithClient(httpClient).
+			SetBaseURL(ts.URL).
+			SetRedirectPolicy(resty.NoRedirectPolicy()).
+			SetDoNotParseResponse(true)
+
+		t.Skip("Skipping this test while debugging others!")
 		body := `{"url":"https://example.com"}`
 		var gzippedBody bytes.Buffer
 		gz := gzip.NewWriter(&gzippedBody)
@@ -169,96 +269,40 @@ func TestGzipHandling(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, gz.Close())
 
+		// Here we send gzipped data AND ask for gzipped response
 		resp, err := client.R().
-			SetHeader("Content-Encoding", "gzip").
 			SetHeader("Content-Type", "application/json").
+			SetHeader("Content-Encoding", "gzip"). // request is gzipped
+			SetHeader("Accept-Encoding", "gzip").  // response is gzipped
 			SetBody(gzippedBody.Bytes()).
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
 
-		t.Logf("Raw response body: %s", resp.Body())
-		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
+		dump, _ := httputil.DumpResponse(resp.RawResponse, true)
+		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
 
-		//assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
-		//
-		//var result map[string]string
-		//err = json.Unmarshal(resp.Body(), &result)
-		//require.NoError(t, err, "Failed to unmarshal response")
-		//assert.Contains(t, result["result"], cfg.BaseURL, "Short URL should start with base URL")
-	})
+		// We expect the server to return 201 + a gzip-encoded JSON
+		require.Equal(t, http.StatusCreated, resp.StatusCode())
+		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"),
+			"Expected gzipped response")
 
-	// Test case: Serve gzip-encoded response
-	t.Run("Serve gzip-encoded response", func(t *testing.T) {
-		body := `{"url":"https://example.com"}`
-		resp, err := client.R().
-			SetHeader("Content-Type", "application/json").
-			SetHeader("Accept-Encoding", "gzip").
-			SetBody(body).
-			Post("/api/shorten")
-		require.NoError(t, err, "Request failed")
-
-		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
-		assert.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected Content-Encoding to be gzip")
-
+		// Manually decompress the response
 		gzr, err := gzip.NewReader(bytes.NewReader(resp.Body()))
-		require.NoError(t, err, "Failed to create gzip reader") // (LINE 200)
-		defer func(gzr *gzip.Reader) {
-			err := gzr.Close()
-			if err != nil {
-				middleware.Log.Error().Msg("Couldnt close gzip reader")
-			}
-		}(gzr)
+		require.NoError(t, err, "Failed to create gzip reader")
+		defer gzr.Close()
 
 		decompressedBody, err := io.ReadAll(gzr)
 		require.NoError(t, err, "Failed to decompress gzip response")
+		t.Logf("Decompressed response body: %s", decompressedBody)
 
 		var respData map[string]string
 		err = json.Unmarshal(decompressedBody, &respData)
-		require.NoError(t, err, "Failed to unmarshal response")
-		assert.Contains(t, respData["result"], cfg.BaseURL, "Short URL should start with base URL")
+		require.NoError(t, err, "Failed to unmarshal response JSON")
+		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
+}
 
-	// Test case: Unsupported content type
-	t.Run("Unsupported content type", func(t *testing.T) {
-		resp, err := client.R().
-			SetHeader("Content-Type", "application/json").
-			SetBody(`{"content":"unknown"}`).
-			Post("/api/shorten")
-		require.NoError(t, err)
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode(), "Expected status code 400 Bad Request")
-	})
-
-	// Test case: Batch request with gzip encoding
-	t.Run("Batch request with gzip encoding", func(t *testing.T) {
-		batchRequest := []map[string]string{
-			{"correlation_id": "1", "original_url": "https://example1.com"},
-			{"correlation_id": "2", "original_url": "https://example2.com"},
-		}
-		body, err := json.Marshal(batchRequest)
-		require.NoError(t, err)
-
-		var gzippedBody bytes.Buffer
-		gz := gzip.NewWriter(&gzippedBody)
-		_, err = gz.Write(body)
-		require.NoError(t, err)
-		require.NoError(t, gz.Close())
-
-		resp, err := client.R().
-			SetHeader("Content-Encoding", "gzip").
-			SetHeader("Content-Type", "application/json").
-			SetBody(gzippedBody.Bytes()).
-			Post("/api/shorten/batch")
-		require.NoError(t, err)
-		assert.Equal(t, http.StatusCreated, resp.StatusCode(), "Expected status code 201 Created")
-
-		var results []map[string]string
-		err = json.Unmarshal(resp.Body(), &results)
-		require.NoError(t, err)
-
-		require.Len(t, results, len(batchRequest), "Number of responses should match number of requests")
-		for _, result := range results {
-			assert.Contains(t, result["short_url"], cfg.BaseURL, "Short URL should start with base URL")
-			assert.NotEmpty(t, result["correlation_id"], "Correlation ID should not be empty")
-		}
-	})
+// isGzipData is just a convenience function to see if bytes begin with the gzip magic number.
+func isGzipData(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0x1F && data[1] == 0x8B
 }

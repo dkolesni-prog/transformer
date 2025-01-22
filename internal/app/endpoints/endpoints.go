@@ -3,6 +3,7 @@ package endpoints
 // Internal/app/endpoints/endpoints.go.
 import (
 	"context"
+	"log"
 	"net/http"
 	"strings"
 
@@ -24,7 +25,7 @@ const contentType = "Content-Type"
 
 func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version string) http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.GzipMiddleware, middleware.WithLogging)
+	r.Use(middleware.WithLogging, middleware.GzipMiddleware)
 
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURL(w, r, s, cfg)
@@ -71,6 +72,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 	}
 	defer func() {
 		if err := r.Body.Close(); err != nil {
+			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
 			middleware.Log.Error().Err(err).Msg("Error closing request body")
 		}
 	}()
@@ -130,6 +132,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 
 	defer func() {
 		if err := r.Body.Close(); err != nil {
+			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
 			middleware.Log.Error().Err(err).Msg("Error closing request body")
 		}
 	}()
@@ -178,6 +181,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 
 	defer func() {
 		if err := r.Body.Close(); err != nil {
+			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
 			middleware.Log.Error().Err(err).Msg("Error closing request body")
 		}
 	}()
@@ -203,6 +207,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 
 	parsedURL, err := url.ParseRequestURI(req.URL)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
@@ -214,7 +219,8 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 			respJSON, _ := json.Marshal(response)
 			w.Header().Set(contentType, "application/json; charset=utf-8")
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write(respJSON)
+			n, err := w.Write(respJSON)
+			log.Printf("[ShortenURLJSON] wrote %d bytes, err=%v\n", n, err)
 			return
 		}
 		middleware.Log.Error().Err(err).Msg("Error creating short URL")
@@ -225,15 +231,20 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 	response := map[string]string{"result": shortURL}
 	respJSON, err := json.Marshal(response)
 	if err != nil {
+
 		http.Error(w, "Failed to marshal JSON", http.StatusInternalServerError)
 		return
 	}
+	log.Println("TESTING MARSHAL JSON error. That is:", err)
 	w.Header().Set(contentType, "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusCreated)
-	_, err = w.Write(respJSON)
+	n, err := w.Write(respJSON)
+	log.Printf("[ShortenURLJSON] wrote %d bytes, err=%v\n", n, err)
 	if err != nil {
 		middleware.Log.Error().Err(err).Msg("Error writing")
 	}
+	log.Println(" MARSHAL  is:", respJSON)
+
 }
 
 func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
