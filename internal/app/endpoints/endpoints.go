@@ -98,6 +98,8 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 	shortURLs, err := s.SaveBatch(r.Context(), urls, cfg)
 	if err != nil {
 		middleware.Log.Error().Err(err).Msg("Batch save failed")
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 
@@ -110,7 +112,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 	}
 
 	w.Header().Set(contentType, "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
+	w.WriteHeader(http.StatusOK)
 	if err := json.NewEncoder(w).Encode(responses); err != nil {
 		middleware.Log.Error().Err(err).Msg("Failed to write batch response")
 	}

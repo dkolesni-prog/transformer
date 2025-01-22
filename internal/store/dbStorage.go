@@ -170,7 +170,7 @@ func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config
 			sqlInsert := `
 INSERT INTO short_urls (short_id, original_url)
 VALUES ($1, $2)
-ON CONFLICT (original_url) DO DO NOTHING
+ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
 `
 			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
