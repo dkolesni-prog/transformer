@@ -8,7 +8,11 @@
 .golangci.yml
 Dockerfile
 cmd/shortener/shortener_data.json
-*shortener_data.json*
+shortenertestbeta
+payload.gz
+launch.txt
+coverage.html
+shortener_data.json
 ZAP*
 allProjectLinters.txt
 ci.txt

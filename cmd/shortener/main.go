@@ -2,10 +2,11 @@ package main
 
 import (
 	"context"
-	"errors"
-
 	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"os"
+	"os/signal"
+	"syscall"
 
 	"net/http"
 	"time"
@@ -44,13 +45,34 @@ func run() error {
 
 	router := endpoints.NewRouter(ctx, cfg, storage, version)
 
-	err = http.ListenAndServe(cfg.RunAddr, router)
-	if err != nil {
-		wrappedErr := errors.New("server failed to start")
-		middleware.Log.Error().Err(err).Msg("Server encountered an error")
-		return wrappedErr
+	srv := &http.Server{
+		Addr:    cfg.RunAddr,
+		Handler: router,
 	}
+
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			middleware.Log.Error().Err(err).Msg("Server encountered an error")
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP, syscall.SIGQUIT)
+
+	sig := <-stop
+	middleware.Log.Info().Msgf("Received signal %v. Shutting down the server...", sig)
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1*time.Second) // was: 5*time.Second
+	defer shutdownCancel()
+
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		middleware.Log.Error().Err(err).Msg("Server shutdown error")
+		return err
+	}
+
+	middleware.Log.Info().Msg("Server exited cleanly")
 	return nil
+
 }
 
 //nolint:unparam  // Retaining error return for bc if removed. the main is red

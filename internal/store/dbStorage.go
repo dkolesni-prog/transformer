@@ -56,7 +56,7 @@ func (r *RDB) Bootstrap(ctx context.Context) error {
 CREATE TABLE IF NOT EXISTS short_urls (
 	id SERIAL PRIMARY KEY,
 	short_id TEXT UNIQUE NOT NULL,
-	original_url TEXT NOT NULL,
+	original_url TEXT UNIQUE NOT NULL,
 	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
 	deleted_at TIMESTAMP
 );
@@ -133,7 +133,6 @@ WHERE original_url = $1;
 			Str("originalURL", urlToSave.String()).
 			Msg("Database insert error, retrying")
 
-		//middleware.Log.Error().Err(err).Msg("Database insert error, retrying")
 	}
 
 	middleware.Log.Warn().Msg("Failed to generate a unique short_id after retries")
