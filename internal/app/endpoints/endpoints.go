@@ -112,7 +112,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 	}
 
 	w.Header().Set(contentType, "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(http.StatusCreated)
 	if err := json.NewEncoder(w).Encode(responses); err != nil {
 		middleware.Log.Error().Err(err).Msg("Failed to write batch response")
 	}
