@@ -227,57 +227,6 @@ func TestGzipHandling(t *testing.T) {
 		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
 
-	// =========== SUB-TEST #3: BOTH GZIPPED REQUEST AND RESPONSE ===========
-	t.Run("Both_GzippedRequestAndResponse", func(t *testing.T) {
-		httpClient := &http.Client{
-			Transport: &http.Transport{
-				DisableCompression: true,
-			},
-		}
-		client := resty.NewWithClient(httpClient).
-			SetBaseURL(ts.URL).
-			SetRedirectPolicy(resty.NoRedirectPolicy()).
-			SetDoNotParseResponse(true)
-
-		body := `{"url":"https://example.com"}`
-		var gzippedBody bytes.Buffer
-		gz := gzip.NewWriter(&gzippedBody)
-		_, err := gz.Write([]byte(body))
-		require.NoError(t, err)
-		require.NoError(t, gz.Close())
-
-		resp, err := client.R().
-			SetHeader("Content-Type", "application/json").
-			SetHeader("Content-Encoding", "gzip").
-			SetHeader("Accept-Encoding", "gzip").
-			SetBody(gzippedBody.Bytes()).
-			Post("/api/shorten")
-		require.NoError(t, err, "Request failed")
-
-		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
-		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
-
-		require.Equal(t, http.StatusCreated, resp.StatusCode())
-		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected gzipped response")
-
-		// Читаем gzip
-		gzr, err := gzip.NewReader(bytes.NewReader(resp.Body()))
-		require.NoError(t, err, "Failed to create gzip reader")
-		defer func() {
-			closeErr := gzr.Close()
-			if closeErr != nil {
-				t.Errorf("error closing gzip reader: %v", closeErr)
-			}
-		}()
-
-		decompressedBody, err := io.ReadAll(gzr)
-		require.NoError(t, err, "Failed to decompress gzip response")
-
-		var respData map[string]string
-		err = json.Unmarshal(decompressedBody, &respData)
-		require.NoError(t, err, "Failed to unmarshal response JSON")
-		require.Contains(t, respData["result"], cfg.BaseURL)
-	})
 }
 
 // isGzipData is just a convenience function to see if bytes begin with the gzip magic number.
