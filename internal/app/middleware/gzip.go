@@ -42,6 +42,8 @@ func (c *compressWriter) Write(p []byte) (int, error) {
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
+
+	c.w.Header().Del("Content-Length")
 	if statusCode < 300 {
 		log.Println("Check if entered WriteHeader")
 		c.w.Header().Set("Content-Encoding", "gzip")
