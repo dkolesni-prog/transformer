@@ -263,7 +263,7 @@ func TestGzipHandling(t *testing.T) {
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
 
-		dump, _ := httputil.DumpResponse(resp.RawResponse, true)
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
 
 		require.Equal(t, http.StatusCreated, resp.StatusCode())
