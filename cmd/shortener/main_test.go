@@ -24,7 +24,6 @@ import (
 
 // TestEndpoints tests the main endpoints of the URL shortening service.
 func TestEndpoints(t *testing.T) {
-	// Update with a valid file path for the test
 	cfg := config.NewConfig()
 	storage := store.NewStorage(cfg)
 
@@ -45,7 +44,7 @@ func TestEndpoints(t *testing.T) {
 			body:     "https://example.com",
 			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
-			wantBody: cfg.BaseURL,
+			wantBody: cfg.BaseURL, // Проверяем, что ответ содержит базовый URL
 			wantHeader: map[string]string{
 				"Content-Type": "text/plain; charset=utf-8",
 			},
@@ -55,12 +54,12 @@ func TestEndpoints(t *testing.T) {
 			method: http.MethodPost,
 			url:    "/api/shorten/batch",
 			body: `[
-		{"correlation_id":"1", "original_url":"https://example1.com"}, 
-		{"correlation_id":"2", "original_url":"https://example2.com"}
-	]`,
+				{"correlation_id":"1", "original_url":"https://example1.com"}, 
+				{"correlation_id":"2", "original_url":"https://example2.com"}
+			]`,
 			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
-			wantBody: `[{"correlation_id":"1", "short_url":"`, // Verify that it contains the expected prefix
+			wantBody: `[{"correlation_id":"1", "short_url":"`, // Проверяем, что в ответе есть такой префикс
 			wantHeader: map[string]string{
 				"Content-Type": "application/json; charset=utf-8",
 			},
@@ -92,6 +91,7 @@ func TestEndpoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// Если нужно — подготавливаем тестовое окружение
 			if tt.setup != nil {
 				tt.setup(storage)
 			}
@@ -102,6 +102,7 @@ func TestEndpoints(t *testing.T) {
 			} else {
 				req = httptest.NewRequest(tt.method, tt.url, http.NoBody)
 			}
+
 			rec := httptest.NewRecorder()
 
 			r := chi.NewRouter()
@@ -121,6 +122,7 @@ func TestEndpoints(t *testing.T) {
 				t.Errorf("got status code %d, want %d", rec.Code, tt.wantCode)
 			}
 
+			// Доп.проверка для batch-эндпоинта
 			if tt.method == http.MethodPost && strings.Contains(tt.url, "/batch") {
 				var results []map[string]string
 				err := json.Unmarshal(rec.Body.Bytes(), &results)
@@ -144,7 +146,6 @@ func TestEndpoints(t *testing.T) {
 }
 
 func TestGzipHandling(t *testing.T) {
-	// 1) Spin up your server
 	cfg := config.NewConfig()
 	storeNotImported := store.NewMemoryStorage()
 	router := endpoints.NewRouter(context.Background(), cfg, storeNotImported, "testversion")
@@ -158,15 +159,11 @@ func TestGzipHandling(t *testing.T) {
 				DisableCompression: true,
 			},
 		}
-
-		// Создаём Resty-клиент, который НЕ будет автоматически распаковывать gzip,
-		// чтобы мы могли вручную проверить поток.
 		client := resty.NewWithClient(httpClient).
 			SetBaseURL(ts.URL).
 			SetRedirectPolicy(resty.NoRedirectPolicy()).
 			SetDoNotParseResponse(true)
 
-		// Отправляем gzipped-данные в запросе; не просим gzip-ответ.
 		body := `{"url":"https://example.com"}`
 		var gzippedBody bytes.Buffer
 		gz := gzip.NewWriter(&gzippedBody)
@@ -182,15 +179,12 @@ func TestGzipHandling(t *testing.T) {
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
 
-		// Отдельно прокомментирован длинный текст, чтобы не превышать лимит по длине строки.
-		// it will dump only the response headers (and the first line/status) but will not consume the body
-		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false) // Читаем только заголовки
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
 
 		rawBody, err := io.ReadAll(resp.RawResponse.Body)
 		require.NoError(t, err, "Failed to read raw response body")
 		require.False(t, isGzipData(rawBody), "Expected plain JSON")
-		t.Logf("Raw body: %s", string(rawBody))
 
 		var respData map[string]string
 		err = json.Unmarshal(rawBody, &respData)
@@ -207,13 +201,12 @@ func TestGzipHandling(t *testing.T) {
 		body := `{"url":"https://example.com"}`
 		resp, err := client.R().
 			SetHeader("Content-Type", "application/json").
-			SetHeader("Accept-Encoding", "gzip"). // Запрашиваем gzip-ответ
+			SetHeader("Accept-Encoding", "gzip").
 			SetDoNotParseResponse(true).
 			SetBody([]byte(body)).
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
 
-		// it will dump only the response headers (and the first line/status) but will not consume the body
 		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
 
@@ -236,13 +229,11 @@ func TestGzipHandling(t *testing.T) {
 
 	// =========== SUB-TEST #3: BOTH GZIPPED REQUEST AND RESPONSE ===========
 	t.Run("Both_GzippedRequestAndResponse", func(t *testing.T) {
-		// Уберём t.Skip(), чтобы код реально исполнялся и клиент не оставался «неиспользованным».
 		httpClient := &http.Client{
 			Transport: &http.Transport{
 				DisableCompression: true,
 			},
 		}
-
 		client := resty.NewWithClient(httpClient).
 			SetBaseURL(ts.URL).
 			SetRedirectPolicy(resty.NoRedirectPolicy()).
@@ -257,8 +248,8 @@ func TestGzipHandling(t *testing.T) {
 
 		resp, err := client.R().
 			SetHeader("Content-Type", "application/json").
-			SetHeader("Content-Encoding", "gzip"). // request is gzipped
-			SetHeader("Accept-Encoding", "gzip").  // response is gzipped
+			SetHeader("Content-Encoding", "gzip").
+			SetHeader("Accept-Encoding", "gzip").
 			SetBody(gzippedBody.Bytes()).
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
@@ -269,6 +260,7 @@ func TestGzipHandling(t *testing.T) {
 		require.Equal(t, http.StatusCreated, resp.StatusCode())
 		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected gzipped response")
 
+		// Читаем gzip
 		gzr, err := gzip.NewReader(bytes.NewReader(resp.Body()))
 		require.NoError(t, err, "Failed to create gzip reader")
 		defer func() {
@@ -280,7 +272,6 @@ func TestGzipHandling(t *testing.T) {
 
 		decompressedBody, err := io.ReadAll(gzr)
 		require.NoError(t, err, "Failed to decompress gzip response")
-		t.Logf("Decompressed response body: %s", decompressedBody)
 
 		var respData map[string]string
 		err = json.Unmarshal(decompressedBody, &respData)
