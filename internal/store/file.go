@@ -210,4 +210,25 @@ func (s *Storage) saveRecord(rec Record) error {
 	return nil
 }
 
+// Вспомогательный метод для тестов (SetIfAbsent).
+func (s *Storage) SetIfAbsent(short, longURL string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.keyShortValuelong[short]; ok {
+		return "", false
+	}
+	rec := Record{
+		ShortURL:    short,
+		OriginalURL: longURL,
+		UserID:      "", // тест не задаёт
+	}
+	s.keyShortValuelong[short] = rec
+
+	if err := s.saveRecord(rec); err != nil {
+		middleware.Log.Error().Err(err).Msg("Error saving record to file in SetIfAbsent")
+	}
+	return short, true
+}
+
 // ensureSlash
