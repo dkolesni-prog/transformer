@@ -1,25 +1,26 @@
-// Internal/store/memory.go.
-
+// internal/store/memory.go
 package store
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/dkolesni-prog/transformer/internal/config"
-	"github.com/dkolesni-prog/transformer/internal/helpers"
 	"net/url"
 	"sync"
+
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 )
 
 type MemoryRecord struct {
 	OriginalURL string
 	UserID      string
+	IsDeleted   bool
 }
 
 type MemoryStorage struct {
 	mu   sync.Mutex
-	data map[string]MemoryRecord // shortID -> MemoryRecord
+	data map[string]MemoryRecord // short -> MemoryRecord
 }
 
 func NewMemoryStorage() *MemoryStorage {
@@ -28,25 +29,28 @@ func NewMemoryStorage() *MemoryStorage {
 	}
 }
 
+func (m *MemoryStorage) Bootstrap(ctx context.Context) error {
+	return nil
+}
+
 func (m *MemoryStorage) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
 	for i := 0; i < maxRetries; i++ {
-		randVal, err := helpers.RandStringRunes(randLen)
-		if err != nil {
-			return "", err
+		randVal, genErr := helpers.RandStringRunes(randLen)
+		if genErr != nil {
+			return "", fmt.Errorf("randVal: %w", genErr)
 		}
-
 		m.mu.Lock()
 		_, exists := m.data[randVal]
 		if !exists {
 			m.data[randVal] = MemoryRecord{
 				OriginalURL: urlToSave.String(),
 				UserID:      userID,
+				IsDeleted:   false,
 			}
 			m.mu.Unlock()
-			// Возвращаем
 			return ensureSlash(cfg.BaseURL) + randVal, nil
 		}
 		m.mu.Unlock()
@@ -57,47 +61,66 @@ func (m *MemoryStorage) Save(ctx context.Context, userID string, urlToSave *url.
 func (m *MemoryStorage) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	result := make([]string, 0, len(urls))
+
+	var out []string
 	for _, u := range urls {
-		id := fmt.Sprintf("%x", len(m.data))
-		m.data[id] = MemoryRecord{
+		key := fmt.Sprintf("%x", len(m.data))
+		m.data[key] = MemoryRecord{
 			OriginalURL: u.String(),
 			UserID:      userID,
+			IsDeleted:   false,
 		}
-		result = append(result, ensureSlash(cfg.BaseURL)+id)
+		out = append(out, ensureSlash(cfg.BaseURL)+key)
 	}
-	return result, nil
+	return out, nil
+}
+
+func (m *MemoryStorage) LoadFull(ctx context.Context, shortID string) (*url.URL, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	rec, ok := m.data[shortID]
+	if !ok {
+		return nil, false, errors.New("not found")
+	}
+	parsed, err := url.Parse(rec.OriginalURL)
+	if err != nil {
+		return nil, false, errors.New("invalid stored URL")
+	}
+	return parsed, rec.IsDeleted, nil
 }
 
 func (m *MemoryStorage) LoadUserURLs(ctx context.Context, userID string, baseURL string) ([]UserURL, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	var list []UserURL
+	var res []UserURL
 	for shortID, rec := range m.data {
-		if rec.UserID == userID {
-			list = append(list, UserURL{
+		if rec.UserID == userID && !rec.IsDeleted {
+			res = append(res, UserURL{
 				ShortURL:    ensureSlash(baseURL) + shortID,
 				OriginalURL: rec.OriginalURL,
 			})
 		}
 	}
-	return list, nil
+	return res, nil
 }
 
-func (m *MemoryStorage) Load(ctx context.Context, id string) (*url.URL, error) {
+func (m *MemoryStorage) DeleteBatch(ctx context.Context, userID string, shortIDs []string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	rec, ok := m.data[id]
-	if !ok {
-		return nil, errors.New("short ID not found")
+	for _, sid := range shortIDs {
+		rec, ok := m.data[sid]
+		if !ok {
+			continue
+		}
+		if rec.UserID == userID {
+			rec.IsDeleted = true
+			m.data[sid] = rec
+		}
 	}
-	parsed, err := url.Parse(rec.OriginalURL)
-	if err != nil {
-		return nil, errors.New("invalid stored URL")
-	}
-	return parsed, nil
+	return nil
 }
 
 func (m *MemoryStorage) Ping(ctx context.Context) error {
@@ -106,22 +129,4 @@ func (m *MemoryStorage) Ping(ctx context.Context) error {
 
 func (m *MemoryStorage) Close(ctx context.Context) error {
 	return nil
-}
-
-func (m *MemoryStorage) Bootstrap(ctx context.Context) error {
-	return nil
-}
-
-func (m *MemoryStorage) setIfAbsent(short, original string) (string, bool) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	if _, exists := m.data[short]; exists {
-		return "", false
-	}
-	m.data[short] = MemoryRecord{
-		OriginalURL: original,
-		UserID:      "",
-	}
-	return short, true
 }

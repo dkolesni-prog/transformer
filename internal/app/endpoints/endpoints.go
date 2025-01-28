@@ -1,32 +1,33 @@
+// internal/app/endpoints/endpoints.go
 package endpoints
 
-// Internal/app/endpoints/endpoints.go.
 import (
-	"log"
+	"encoding/json"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/config"
 	"github.com/dkolesni-prog/transformer/internal/store"
 
-	"encoding/json"
-	"errors"
-	"io"
-	"net/url"
-
 	"github.com/go-chi/chi/v5"
 )
 
-const errSomethingWentWrong = "Something went wrong"
-const internalServerError = "Internal Server Error"
-const contentType = "Content-Type"
+const (
+	internalServerError = "Internal Server Error."
+	contentType         = "Content-Type"
+	contentTypeJSON     = "application/json; charset=utf-8"
+	contentTypeText     = "text/plain; charset=utf-8"
+)
 
 func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.WithLogging, middleware.GzipMiddleware)
 	r.Use(middleware.AuthMiddleware)
 
+	// Сокращение URL
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURL(w, r, s, cfg)
 	})
@@ -35,31 +36,70 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 		ShortenURLJSON(w, r, s, cfg)
 	})
 
-	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
-		GetVersion(w, r, version)
-	})
-
-	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-		GetFullURL(w, r, s)
-	})
-
-	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
-		Ping(w, r, s)
-	})
-
+	// Batch
 	r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
 		ShortenBatch(w, r, s, cfg)
 	})
 
+	// Удаление (DELETE /api/user/urls)
+	r.Delete("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
+		DeleteUserURLs(w, r, s)
+	})
+
+	// Список "своих" ссылок
 	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
 		GetUserURLs(w, r, s, cfg)
+	})
+
+	// GET /{id}
+	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
+		GetFullURL(w, r, s)
+	})
+
+	// Ping
+	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
+		Ping(w, r, s)
+	})
+
+	// Версия
+	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
+		GetVersion(w, r, version)
 	})
 
 	return r
 }
 
+// DeleteUserURLs удаляет ссылки
+func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
+	userIDAny := r.Context().Value("userID")
+	userID, ok := userIDAny.(string)
+	if !ok || userID == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// Считываем массив shortIDs
+	var toDelete []string
+	if err := json.NewDecoder(r.Body).Decode(&toDelete); err != nil {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	defer r.Body.Close()
+
+	// Асинхронно помечаем ссылки удалёнными:
+	go func() {
+		err := s.DeleteBatch(r.Context(), userID, toDelete)
+		if err != nil {
+			middleware.Log.Error().Err(err).
+				Strs("shortIDs", toDelete).
+				Msg("Failed to mark URLs as deleted")
+		}
+	}()
+
+	w.WriteHeader(http.StatusAccepted)
+}
+
 func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
-	// Достаём userID из контекста (его туда положил AuthMiddleware)
 	userIDAny := r.Context().Value("userID")
 	userID, ok := userIDAny.(string)
 	if !ok || userID == "" {
@@ -72,18 +112,32 @@ func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *con
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
-
 	if len(list) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-
 	if err := json.NewEncoder(w).Encode(list); err != nil {
 		http.Error(w, "Internal server error", http.StatusInternalServerError)
 	}
+}
+
+// GetFullURL — проверка удалён/не удалён
+func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
+	id := chi.URLParam(r, "id")
+
+	longURL, isDeleted, err := s.LoadFull(r.Context(), id)
+	if err != nil {
+		http.Error(w, "Short URL not found", http.StatusNotFound)
+		return
+	}
+	if isDeleted {
+		http.Error(w, "URL is gone", http.StatusGone)
+		return
+	}
+	http.Redirect(w, r, longURL.String(), http.StatusTemporaryRedirect)
 }
 
 func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
@@ -96,144 +150,106 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		ShortURL      string `json:"short_url"`
 	}
 
-	var requests []BatchRequestItem
-	if err := json.NewDecoder(r.Body).Decode(&requests); err != nil {
-		middleware.Log.Error().Err(err).Msg("Failed to decode batch request")
+	var reqs []BatchRequestItem
+	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
-			middleware.Log.Error().Err(err).Msg("Error closing request body")
-		}
-	}()
+	defer r.Body.Close()
 
-	if len(requests) == 0 {
+	if len(reqs) == 0 {
 		http.Error(w, "Empty batch", http.StatusBadRequest)
 		return
 	}
 
-	urls := make([]*url.URL, 0, len(requests))
-	correlationMap := make(map[*url.URL]string)
-
-	for _, req := range requests {
-		parsedURL, err := url.ParseRequestURI(req.OriginalURL)
-		if err != nil {
-			http.Error(w, "Invalid URL in batch: "+req.OriginalURL, http.StatusBadRequest)
+	var urls []*url.URL
+	corrMap := make(map[*url.URL]string)
+	for _, rItem := range reqs {
+		parsed, pErr := url.ParseRequestURI(rItem.OriginalURL)
+		if pErr != nil {
+			http.Error(w, "Invalid URL in batch", http.StatusBadRequest)
 			return
 		}
-		urls = append(urls, parsedURL)
-		correlationMap[parsedURL] = req.CorrelationID
+		urls = append(urls, parsed)
+		corrMap[parsed] = rItem.CorrelationID
 	}
-
-	userIDAny := r.Context().Value("userID")
-	userID, _ := userIDAny.(string)
-	shortURLs, err := s.SaveBatch(r.Context(), userID, urls, cfg)
+	userID, _ := r.Context().Value("userID").(string)
+	shorts, err := s.SaveBatch(r.Context(), userID, urls, cfg)
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("Batch save failed")
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
 
-	responses := make([]BatchResponseItem, len(shortURLs))
-	for i, shortURL := range shortURLs {
-		responses[i] = BatchResponseItem{
-			CorrelationID: correlationMap[urls[i]],
-			ShortURL:      shortURL,
-		}
+	var resp []BatchResponseItem
+	for i, shortU := range shorts {
+		resp = append(resp, BatchResponseItem{
+			CorrelationID: corrMap[urls[i]],
+			ShortURL:      shortU,
+		})
 	}
 
-	w.Header().Set(contentType, "application/json; charset=utf-8")
+	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
-	if err := json.NewEncoder(w).Encode(responses); err != nil {
-		middleware.Log.Error().Err(err).Msg("Failed to write batch response")
-	}
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// ShortenURL handles a POST request with a raw long URL in the body.
 func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("Error reading request body")
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
-			middleware.Log.Error().Err(err).Msg("Error closing request body")
-		}
-	}()
+	defer r.Body.Close()
 
 	longURL := string(body)
 	if longURL == "" {
 		http.Error(w, "Empty body", http.StatusBadRequest)
 		return
 	}
-
-	parsedURL, err := url.ParseRequestURI(longURL)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+	parsed, pErr := url.ParseRequestURI(longURL)
+	if pErr != nil || parsed.Scheme == "" || parsed.Host == "" {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	userIDAny := r.Context().Value("userID")
-	userID, _ := userIDAny.(string)
-	shortURL, err := s.Save(r.Context(), userID, parsedURL, cfg)
-	if err != nil {
-		if strings.Contains(err.Error(), "conflict") {
-			w.Header().Set(contentType, "text/plain; charset=utf-8")
+	userID, _ := r.Context().Value("userID").(string)
+	res, saveErr := s.Save(r.Context(), userID, parsed, cfg)
+	if saveErr != nil {
+		if strings.Contains(saveErr.Error(), "conflict") {
+			w.Header().Set(contentType, contentTypeText)
 			w.WriteHeader(http.StatusConflict)
-			if _, writeErr := w.Write([]byte(shortURL)); writeErr != nil {
-				middleware.Log.Error().Err(writeErr).Msg("Error writing conflict response")
-			}
+			_, _ = w.Write([]byte(res))
 			return
 		}
-		middleware.Log.Error().Err(err).Msg("Error creating short URL")
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
 
-	w.Header().Set(contentType, "text/plain; charset=utf-8")
+	w.Header().Set(contentType, contentTypeText)
 	w.WriteHeader(http.StatusCreated)
-	if _, err := w.Write([]byte(shortURL)); err != nil {
-		middleware.Log.Error().Err(err).Msg("Error writing response")
-	}
+	_, _ = w.Write([]byte(res))
 }
 
-// ShortenURLJSON handles a POST request with a JSON {"url":"..."} in the body.
 func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
-
-	defer func() {
-		if err := r.Body.Close(); err != nil {
-			log.Println("Error closing request body THISISTHEMARKTHATGZIPDATAOK", err)
-			middleware.Log.Error().Err(err).Msg("Error closing request body")
-		}
-	}()
+	defer r.Body.Close()
 
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-
 	var req struct {
 		URL string `json:"url"`
 	}
 	if err := json.Unmarshal(body, &req); err != nil {
-		middleware.Log.Error().Err(err).Msg("Failed to parse json")
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
@@ -242,48 +258,36 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		return
 	}
 
-	parsedURL, err := url.ParseRequestURI(req.URL)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
-
+	parsed, pErr := url.ParseRequestURI(req.URL)
+	if pErr != nil || parsed.Scheme == "" || parsed.Host == "" {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
 
-	userIDAny := r.Context().Value("userID")
-	userID, _ := userIDAny.(string)
-	shortURL, err := s.Save(r.Context(), userID, parsedURL, cfg)
-	if err != nil {
-		if strings.Contains(err.Error(), "conflict") {
-			response := map[string]string{"result": shortURL}
-			respJSON, _ := json.Marshal(response)
-			w.Header().Set(contentType, "application/json; charset=utf-8")
+	userID, _ := r.Context().Value("userID").(string)
+	shortU, saveErr := s.Save(r.Context(), userID, parsed, cfg)
+	if saveErr != nil {
+		if strings.Contains(saveErr.Error(), "conflict") {
+			w.Header().Set(contentType, contentTypeJSON)
 			w.WriteHeader(http.StatusConflict)
-			n, err := w.Write(respJSON)
-			log.Printf("[ShortenURLJSON] wrote %d bytes, err=%v\n", n, err)
+			_ = json.NewEncoder(w).Encode(map[string]string{"result": shortU})
 			return
 		}
-		middleware.Log.Error().Err(err).Msg("Error creating short URL")
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
 
-	response := map[string]string{"result": shortURL}
-	respJSON, err := json.Marshal(response)
-	if err != nil {
+	w.Header().Set(contentType, contentTypeJSON)
+	w.WriteHeader(http.StatusCreated)
+	_ = json.NewEncoder(w).Encode(map[string]string{"result": shortU})
+}
 
-		http.Error(w, "Failed to marshal JSON", http.StatusInternalServerError)
+func Ping(w http.ResponseWriter, r *http.Request, s store.Store) {
+	if err := s.Ping(r.Context()); err != nil {
+		http.Error(w, "DB connection failed", http.StatusInternalServerError)
 		return
 	}
-	log.Println("TESTING MARSHAL JSON error. That is:", err)
-	w.Header().Set(contentType, "application/json; charset=utf-8")
-	w.WriteHeader(http.StatusCreated)
-	n, err := w.Write(respJSON)
-	log.Printf("[ShortenURLJSON] wrote %d bytes, err=%v\n", n, err)
-	if err != nil {
-		middleware.Log.Error().Err(err).Msg("Error writing")
-	}
-	log.Println(" MARSHAL  is:", respJSON)
-
+	w.WriteHeader(http.StatusOK)
 }
 
 func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
@@ -293,34 +297,5 @@ func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 	}
 	w.Header().Set(contentType, "text/plain")
 	w.WriteHeader(http.StatusOK)
-	_, err := w.Write([]byte(version))
-	if err != nil {
-		http.Error(w, errSomethingWentWrong, http.StatusInternalServerError)
-		middleware.Log.Printf("Error writing version response: %v", err)
-		return
-	}
-}
-
-func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
-	middleware.Log.Info().Msg("GetFullURL entered execution")
-	id := chi.URLParam(r, "id")
-	middleware.Log.Info().Msg("chi relayed id")
-	long, err := s.Load(r.Context(), id) // It used to be s.Load(ctx, id)
-	middleware.Log.Info().Msg("Load operation was executed relayed id")
-	if err != nil {
-		wrappedErr := errors.New("failed to load short URL with ID: " + id + " - " + err.Error())
-		middleware.Log.Error().Err(wrappedErr).Msg("Could not find a short URL")
-		http.Error(w, "Short URL not found", http.StatusNotFound)
-		return
-	}
-	http.Redirect(w, r, long.String(), http.StatusTemporaryRedirect)
-}
-
-func Ping(w http.ResponseWriter, r *http.Request, s store.Store) {
-	if err := s.Ping(r.Context()); err != nil {
-		http.Error(w, "DB connection failed", http.StatusInternalServerError)
-		return
-	}
-	// Otherwise, return 200 OK
-	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(version))
 }
