@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"os"
@@ -53,7 +54,7 @@ func run() error {
 	}
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := srv.ListenAndServe(); !errors.Is(err, http.ErrServerClosed) {
 			middleware.Log.Error().Err(err).Msg("Server encountered an error")
 		}
 	}()
