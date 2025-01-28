@@ -6,74 +6,94 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
-	"sync"
-
 	"github.com/dkolesni-prog/transformer/internal/config"
 	"github.com/dkolesni-prog/transformer/internal/helpers"
+	"net/url"
+	"sync"
 )
 
+type MemoryRecord struct {
+	OriginalURL string
+	UserID      string
+}
+
 type MemoryStorage struct {
-	data map[string]string // short -> original
 	mu   sync.Mutex
+	data map[string]MemoryRecord // shortID -> MemoryRecord
 }
 
 func NewMemoryStorage() *MemoryStorage {
 	return &MemoryStorage{
-		data: make(map[string]string),
+		data: make(map[string]MemoryRecord),
 	}
 }
 
-func (m *MemoryStorage) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) (string, error) {
+func (m *MemoryStorage) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
-	const randValLength = 8
+	const randLen = 8
 
-	for i := range maxRetries {
-		randVal, err := helpers.RandStringRunes(randValLength)
+	for i := 0; i < maxRetries; i++ {
+		randVal, err := helpers.RandStringRunes(randLen)
 		if err != nil {
-			return "", errors.New("could not generate random string")
+			return "", err
 		}
 
-		short, success := m.setIfAbsent(randVal, urlToSave.String())
-		if success {
-			fullShort := helpers.EnsureTrailingSlash(cfg.BaseURL) + short
-			return fullShort, nil
+		m.mu.Lock()
+		_, exists := m.data[randVal]
+		if !exists {
+			m.data[randVal] = MemoryRecord{
+				OriginalURL: urlToSave.String(),
+				UserID:      userID,
+			}
+			m.mu.Unlock()
+			// Возвращаем
+			return ensureSlash(cfg.BaseURL) + randVal, nil
 		}
-		if i == maxRetries-1 {
-			return "", errors.New("could not generate unique short ID")
-		}
+		m.mu.Unlock()
 	}
-
-	return "", errors.New("unexpected error generating short ID")
+	return "", errors.New("could not generate unique short ID")
 }
 
-func (m *MemoryStorage) SaveBatch(_ context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
+func (m *MemoryStorage) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	result := make([]string, 0, len(urls))
+	for _, u := range urls {
+		id := fmt.Sprintf("%x", len(m.data))
+		m.data[id] = MemoryRecord{
+			OriginalURL: u.String(),
+			UserID:      userID,
+		}
+		result = append(result, ensureSlash(cfg.BaseURL)+id)
+	}
+	return result, nil
+}
+
+func (m *MemoryStorage) LoadUserURLs(ctx context.Context, userID string, baseURL string) ([]UserURL, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	ids := make([]string, 0, len(urls))
-	for _, u := range urls {
-		id := fmt.Sprintf("%x", len(m.data))
-		m.data[id] = u.String()
-		ids = append(ids, ensureSlash(cfg.BaseURL)+id)
+	var list []UserURL
+	for shortID, rec := range m.data {
+		if rec.UserID == userID {
+			list = append(list, UserURL{
+				ShortURL:    ensureSlash(baseURL) + shortID,
+				OriginalURL: rec.OriginalURL,
+			})
+		}
 	}
-
-	if len(ids) != len(urls) {
-		return nil, errors.New("not all URLs have been saved")
-	}
-
-	return ids, nil
+	return list, nil
 }
 
 func (m *MemoryStorage) Load(ctx context.Context, id string) (*url.URL, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	longVal, ok := m.data[id]
+	rec, ok := m.data[id]
 	if !ok {
 		return nil, errors.New("short ID not found")
 	}
-	parsed, err := url.Parse(longVal)
+	parsed, err := url.Parse(rec.OriginalURL)
 	if err != nil {
 		return nil, errors.New("invalid stored URL")
 	}
@@ -99,6 +119,9 @@ func (m *MemoryStorage) setIfAbsent(short, original string) (string, bool) {
 	if _, exists := m.data[short]; exists {
 		return "", false
 	}
-	m.data[short] = original
+	m.data[short] = MemoryRecord{
+		OriginalURL: original,
+		UserID:      "",
+	}
 	return short, true
 }

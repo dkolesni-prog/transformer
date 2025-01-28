@@ -15,6 +15,7 @@ type Config struct {
 	BaseURL         string
 	FileStoragePath string
 	DatabaseDSN     string
+	SecretKey       string
 }
 
 var parseOnce sync.Once
@@ -27,6 +28,7 @@ func NewConfig() *Config {
 		flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080/", "base URL for shortened links")
 		flag.StringVar(&cfg.FileStoragePath, "f", "shortener_data.json", "path to file with shortener data")
 		flag.StringVar(&cfg.DatabaseDSN, "d", "postgres://postgres:doo6k4aeN@localhost:5432/transformer_dev?sslmode=disable", "connection string to database")
+		flag.StringVar(&cfg.SecretKey, "secret", "", "secret key for cookie signing")
 		flag.Parse()
 	})
 	if envRunAddr, ok := os.LookupEnv("SERVER_ADDRESS"); ok {
@@ -41,6 +43,13 @@ func NewConfig() *Config {
 	if envDatabaseDSN, ok := os.LookupEnv("DATABASE_DSN"); ok {
 		cfg.DatabaseDSN = envDatabaseDSN
 	}
+	if envSecret, ok := os.LookupEnv("SECRET_KEY"); ok {
+		cfg.SecretKey = envSecret
+	}
 	cfg.BaseURL = helpers.EnsureTrailingSlash(cfg.BaseURL)
+
+	if cfg.SecretKey == "" {
+		cfg.SecretKey = "default-secret-key"
+	}
 	return &cfg
 }

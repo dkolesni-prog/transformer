@@ -1,3 +1,4 @@
+// Cmd/shortener/main.go
 package main
 
 import (
@@ -30,6 +31,7 @@ func run() error {
 	defer cancel()
 
 	cfg := config.NewConfig()
+	middleware.InitAuth(cfg.SecretKey)
 
 	storage, err := newStorage(ctx, cfg)
 	if err != nil {
@@ -43,7 +45,7 @@ func run() error {
 		}
 	}()
 
-	router := endpoints.NewRouter(ctx, cfg, storage, version)
+	router := endpoints.NewRouter(cfg, storage, version)
 
 	srv := &http.Server{
 		Addr:    cfg.RunAddr,

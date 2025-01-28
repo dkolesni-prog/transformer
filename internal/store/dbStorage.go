@@ -54,13 +54,15 @@ func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 func (r *RDB) Bootstrap(ctx context.Context) error {
 	schema := `
 CREATE TABLE IF NOT EXISTS short_urls (
-	id SERIAL PRIMARY KEY,
-	short_id TEXT UNIQUE NOT NULL,
-	original_url TEXT UNIQUE NOT NULL,
-	created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-	deleted_at TIMESTAMP
+    id SERIAL PRIMARY KEY,
+    short_id TEXT UNIQUE NOT NULL,
+    original_url TEXT UNIQUE NOT NULL,
+    user_id TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+    deleted_at TIMESTAMP
 );
 `
+
 	tx, beginErr := r.pool.Begin(ctx)
 	if beginErr != nil {
 		middleware.Log.Error().Err(beginErr).Msg("failed ping")
@@ -88,7 +90,7 @@ CREATE TABLE IF NOT EXISTS short_urls (
 	return nil
 }
 
-func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) (string, error) {
+func (r *RDB) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
@@ -100,13 +102,13 @@ func (r *RDB) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) 
 		}
 
 		sqlInsert := `
-INSERT INTO short_urls (short_id, original_url) 
-VALUES ($1, $2)
+INSERT INTO short_urls (short_id, original_url, user_id) 
+VALUES ($1, $2, $3)
 ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
 `
 		var shortID string
-		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
+		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String(), userID).Scan(&shortID)
 		if err == nil {
 			return ensureSlash(cfg.BaseURL) + shortID, nil
 		}
@@ -139,67 +141,90 @@ WHERE original_url = $1;
 	return "", errors.New("failed to generate a unique short_id")
 }
 
-func (r *RDB) SaveBatch(ctx context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
+func (r *RDB) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
 	tx, beginErr := r.pool.Begin(ctx)
 	if beginErr != nil {
 		middleware.Log.Error().Err(beginErr).Msg("Failed to begin transaction")
-		return nil, fmt.Errorf("failed to begin transaction: %w", beginErr)
+		return nil, fmt.Errorf("begin transaction: %w", beginErr)
 	}
-
 	defer func() {
-		if err := tx.Rollback(ctx); err != nil && !errors.Is(err, pgx.ErrTxClosed) {
-			middleware.Log.Error().Err(err).Msg("Failed to rollback transaction")
+		if rErr := tx.Rollback(ctx); rErr != nil && !errors.Is(rErr, pgx.ErrTxClosed) {
+			middleware.Log.Error().Err(rErr).Msg("Failed to rollback transaction")
 		}
 	}()
 
 	var results []string
+
 	for _, urlToSave := range urls {
 		var shortID string
 		success := false
 
-		for range maxRetries {
+		for i := 0; i < maxRetries; i++ {
 			randomID, genErr := helpers.RandStringRunes(randLen)
 			if genErr != nil {
-				middleware.Log.Error().Err(genErr).Msg("Failed to generate random ID in batch")
-				return nil, fmt.Errorf("failed to generate random ID in batch: %w", genErr)
+				return nil, fmt.Errorf("generate random ID: %w", genErr)
 			}
 
 			sqlInsert := `
-INSERT INTO short_urls (short_id, original_url)
-VALUES ($1, $2)
+INSERT INTO short_urls (short_id, original_url, user_id)
+VALUES ($1, $2, $3)
 ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
 `
-			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String()).Scan(&shortID)
+			err := tx.QueryRow(ctx, sqlInsert, randomID, urlToSave.String(), userID).Scan(&shortID)
 			if err == nil {
-				success = true
+				// Успешно вставили
 				results = append(results, ensureSlash(cfg.BaseURL)+shortID)
+				success = true
 				break
 			}
-
 			if isUniqueViolation(err) {
 				continue
 			}
-
 			middleware.Log.Error().Err(err).Msg("Failed to insert URL in batch")
 			return nil, fmt.Errorf("failed to insert URL in batch: %w", err)
 		}
 
 		if !success {
-			middleware.Log.Error().Str("url", urlToSave.String()).Msg("Failed to save URL after retries")
 			return nil, errors.New("failed to save URL after retries")
 		}
 	}
 
 	if commitErr := tx.Commit(ctx); commitErr != nil {
 		middleware.Log.Error().Err(commitErr).Msg("Failed to commit transaction")
-		return nil, fmt.Errorf("failed to commit transaction: %w", commitErr)
+		return nil, fmt.Errorf("commit transaction: %w", commitErr)
 	}
 
 	return results, nil
+}
+
+func (r *RDB) LoadUserURLs(ctx context.Context, userID string, baseURL string) ([]UserURL, error) {
+	query := `
+SELECT short_id, original_url
+FROM short_urls
+WHERE user_id = $1 AND deleted_at IS NULL
+`
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []UserURL
+	for rows.Next() {
+		var sid, orig string
+		if err := rows.Scan(&sid, &orig); err != nil {
+			return nil, err
+		}
+		result = append(result, UserURL{
+			ShortURL:    ensureSlash(baseURL) + sid,
+			OriginalURL: orig,
+		})
+	}
+	return result, rows.Err()
 }
 
 func (r *RDB) Load(ctx context.Context, shortID string) (*url.URL, error) {

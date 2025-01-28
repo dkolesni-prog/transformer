@@ -2,7 +2,6 @@ package endpoints
 
 // Internal/app/endpoints/endpoints.go.
 import (
-	"context"
 	"log"
 	"net/http"
 	"strings"
@@ -23,9 +22,10 @@ const errSomethingWentWrong = "Something went wrong"
 const internalServerError = "Internal Server Error"
 const contentType = "Content-Type"
 
-func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version string) http.Handler {
+func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.WithLogging, middleware.GzipMiddleware)
+	r.Use(middleware.AuthMiddleware)
 
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURL(w, r, s, cfg)
@@ -51,7 +51,39 @@ func NewRouter(ctx context.Context, cfg *config.Config, s store.Store, version s
 		ShortenBatch(w, r, s, cfg)
 	})
 
+	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
+		GetUserURLs(w, r, s, cfg)
+	})
+
 	return r
+}
+
+func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
+	// Достаём userID из контекста (его туда положил AuthMiddleware)
+	userIDAny := r.Context().Value("userID")
+	userID, ok := userIDAny.(string)
+	if !ok || userID == "" {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	list, err := s.LoadUserURLs(r.Context(), userID, cfg.BaseURL)
+	if err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	if len(list) == 0 {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
+	if err := json.NewEncoder(w).Encode(list); err != nil {
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	}
 }
 
 func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
@@ -95,7 +127,9 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		correlationMap[parsedURL] = req.CorrelationID
 	}
 
-	shortURLs, err := s.SaveBatch(r.Context(), urls, cfg)
+	userIDAny := r.Context().Value("userID")
+	userID, _ := userIDAny.(string)
+	shortURLs, err := s.SaveBatch(r.Context(), userID, urls, cfg)
 	if err != nil {
 		middleware.Log.Error().Err(err).Msg("Batch save failed")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -151,8 +185,9 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		return
 	}
 
-	// Let the store generate a short URL
-	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
+	userIDAny := r.Context().Value("userID")
+	userID, _ := userIDAny.(string)
+	shortURL, err := s.Save(r.Context(), userID, parsedURL, cfg)
 	if err != nil {
 		if strings.Contains(err.Error(), "conflict") {
 			w.Header().Set(contentType, "text/plain; charset=utf-8")
@@ -214,7 +249,9 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		return
 	}
 
-	shortURL, err := s.Save(r.Context(), parsedURL, cfg)
+	userIDAny := r.Context().Value("userID")
+	userID, _ := userIDAny.(string)
+	shortURL, err := s.Save(r.Context(), userID, parsedURL, cfg)
 	if err != nil {
 		if strings.Contains(err.Error(), "conflict") {
 			response := map[string]string{"result": shortURL}

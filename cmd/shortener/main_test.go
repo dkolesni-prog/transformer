@@ -1,9 +1,9 @@
+// Cmd/shortener/main_test.go
 package main
 
 import (
 	"bytes"
 	"compress/gzip"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -148,7 +148,7 @@ func TestEndpoints(t *testing.T) {
 func TestGzipHandling(t *testing.T) {
 	cfg := config.NewConfig()
 	storeNotImported := store.NewMemoryStorage()
-	router := endpoints.NewRouter(context.Background(), cfg, storeNotImported, "testversion")
+	router := endpoints.NewRouter(cfg, storeNotImported, "testversion")
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 

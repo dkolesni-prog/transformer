@@ -1,12 +1,11 @@
 package store
 
-// Internal/store/file.go.
-
 import (
 	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"strconv"
@@ -21,18 +20,19 @@ type Record struct {
 	UUID        string `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
+	UserID      string `json:"user_id"`
 }
 
 type Storage struct {
 	mu                *sync.Mutex
-	keyShortValuelong map[string]string
+	keyShortValuelong map[string]Record
 	filePath          string
 }
 
 func NewStorage(cfg *config.Config) *Storage {
 	s := &Storage{
 		mu:                &sync.Mutex{},
-		keyShortValuelong: make(map[string]string),
+		keyShortValuelong: make(map[string]Record),
 		filePath:          cfg.FileStoragePath,
 	}
 	if err := s.loadFromFile(); err != nil {
@@ -41,64 +41,115 @@ func NewStorage(cfg *config.Config) *Storage {
 	return s
 }
 
-// ----------------------------------------------.
-// Satisfying store.Store interface.
-// ----------------------------------------------.
+// --------------------------------------------------
+// Реализация интерфейса Store
+// --------------------------------------------------
 
-func (s *Storage) Save(ctx context.Context, urlToSave *url.URL, cfg *config.Config) (string, error) {
+func (s *Storage) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
-	const randValLength = 8
-	var shortURL string
+	const randLen = 8
+
+	var shortID string
 	var success bool
 
-	for i := range make([]int, maxRetries) {
-		randVal, err := helpers.RandStringRunes(randValLength)
-		shortURL, success = s.SetIfAbsent(randVal, urlToSave.String())
-		if success {
+	for i := 0; i < maxRetries; i++ {
+		randVal, err := helpers.RandStringRunes(randLen)
+		if err != nil {
+			return "", fmt.Errorf("rand string error: %w", err)
+		}
+
+		s.mu.Lock()
+		_, exists := s.keyShortValuelong[randVal]
+		if !exists {
+			// Создаём новый Record, включая userID
+			rec := Record{
+				UUID:        "",
+				ShortURL:    randVal,
+				OriginalURL: urlToSave.String(),
+				UserID:      userID,
+			}
+			s.keyShortValuelong[randVal] = rec
+
+			if err := s.saveRecord(rec); err != nil {
+				s.mu.Unlock()
+				return "", fmt.Errorf("saveRecord error: %w", err)
+			}
+			s.mu.Unlock()
+
+			shortID = randVal
+			success = true
 			break
 		}
-		if i == maxRetries-1 || err != nil {
-			return "", errors.New("could not generate unique URL")
-		}
+		s.mu.Unlock()
 	}
 
-	fullShortURL := helpers.EnsureTrailingSlash(cfg.BaseURL) + shortURL
-	return fullShortURL, nil
+	if !success {
+		return "", errors.New("could not generate unique URL")
+	}
+	// Возвращаем полный короткий
+	return ensureSlash(cfg.BaseURL) + shortID, nil
 }
 
-func (s *Storage) SaveBatch(_ context.Context, urls []*url.URL, cfg *config.Config) ([]string, error) {
-	ids := make([]string, 0, len(urls))
-
+func (s *Storage) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, u := range urls {
-		id := strconv.Itoa(len(s.keyShortValuelong))
-		s.keyShortValuelong[id] = u.String()
-		ids = append(ids, ensureSlash(cfg.BaseURL)+id)
+	results := make([]string, 0, len(urls))
 
-		if err := s.saveRecord(id, u.String()); err != nil {
+	for _, u := range urls {
+		shortID := strconv.Itoa(len(s.keyShortValuelong))
+
+		rec := Record{
+			UUID:        "",
+			ShortURL:    shortID,
+			OriginalURL: u.String(),
+			UserID:      userID,
+		}
+		s.keyShortValuelong[shortID] = rec
+
+		if err := s.saveRecord(rec); err != nil {
 			middleware.Log.Error().Err(err).Msg("Error saving batch record to file")
 			return nil, errors.New("error saving batch record to file")
 		}
+
+		results = append(results, ensureSlash(cfg.BaseURL)+shortID)
 	}
 
-	if len(ids) != len(urls) {
+	if len(results) != len(urls) {
 		return nil, errors.New("not all URLs have been saved")
 	}
-	return ids, nil
+	return results, nil
 }
 
 func (s *Storage) Load(ctx context.Context, shortID string) (*url.URL, error) {
-	longVal, ok := s.Get(shortID)
+	s.mu.Lock()
+	rec, ok := s.keyShortValuelong[shortID]
+	s.mu.Unlock()
+
 	if !ok {
 		return nil, errors.New("short ID not found")
 	}
-	parsed, err := url.Parse(longVal)
+	parsed, err := url.Parse(rec.OriginalURL)
 	if err != nil {
 		return nil, errors.New("invalid stored URL")
 	}
 	return parsed, nil
+}
+
+func (s *Storage) LoadUserURLs(ctx context.Context, userID string, baseURL string) ([]UserURL, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var result []UserURL
+	for shortID, rec := range s.keyShortValuelong {
+		if rec.UserID == userID {
+			result = append(result, UserURL{
+				ShortURL:    ensureSlash(baseURL) + shortID,
+				OriginalURL: rec.OriginalURL,
+			})
+		}
+	}
+	return result, nil
 }
 
 func (s *Storage) Ping(ctx context.Context) error {
@@ -113,10 +164,11 @@ func (s *Storage) Bootstrap(ctx context.Context) error {
 	return nil
 }
 
-// ----------------------------------------------.
-// Helpers.
-// ----------------------------------------------.
+// --------------------------------------------------
+// Вспомогательные методы
+// --------------------------------------------------
 
+// loadFromFile считывает все записи из файла, кладёт в map.
 func (s *Storage) loadFromFile() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -126,15 +178,9 @@ func (s *Storage) loadFromFile() error {
 		return nil
 	}
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("error opening file")
-		return errors.New("open file: " + err.Error())
+		return fmt.Errorf("open file: %w", err)
 	}
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			middleware.Log.Error().Err(err).Msg("error closing file")
-		}
-	}(file)
+	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
@@ -144,71 +190,67 @@ func (s *Storage) loadFromFile() error {
 			middleware.Log.Error().Err(err).Msgf("Error unmarshaling line: %s", line)
 			continue
 		}
-		s.keyShortValuelong[rec.ShortURL] = rec.OriginalURL
+		// Сохраняем в map
+		s.keyShortValuelong[rec.ShortURL] = rec
 	}
-
 	if scErr := scanner.Err(); scErr != nil {
-		middleware.Log.Error().Err(scErr).Msg("scanner error in loadFromFile")
-		return errors.New("scanner error: " + scErr.Error())
+		return fmt.Errorf("scanner error: %w", scErr)
 	}
 	return nil
 }
 
-// saveRecord just appends a JSON record to the file.
-func (s *Storage) saveRecord(short, original string) error {
-	rec := Record{
-		UUID:        "",
-		ShortURL:    short,
-		OriginalURL: original,
-	}
-
+func (s *Storage) saveRecord(rec Record) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("failed to marshal record")
-		return errors.New("marshal record: " + err.Error())
+		return fmt.Errorf("marshal record: %w", err)
 	}
 
 	file, err := os.OpenFile(s.filePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		middleware.Log.Error().Err(err).Msg("open file error")
-		return errors.New("open file: " + err.Error())
+		return fmt.Errorf("open file: %w", err)
 	}
-	defer func(file *os.File) {
-		err := file.Close()
-		if err != nil {
-			middleware.Log.Error().Err(err).Msg("close file error")
-		}
-	}(file)
+	defer file.Close()
 
 	if _, err := file.Write(data); err != nil {
-		middleware.Log.Error().Err(err).Msg("file write data")
-		return errors.New("file write data: " + err.Error())
+		return fmt.Errorf("file write data: %w", err)
 	}
 	if _, err := file.WriteString("\n"); err != nil {
-		middleware.Log.Error().Err(err).Msg("file write newline")
-		return errors.New("file write newline: " + err.Error())
+		return fmt.Errorf("file write newline: %w", err)
 	}
 	return nil
 }
 
-func (s *Storage) SetIfAbsent(short, long string) (string, bool) {
+// Вспомогательный метод для тесто
+func (s *Storage) SetIfAbsent(short, longURL string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, ok := s.keyShortValuelong[short]; ok {
 		return "", false
 	}
-	s.keyShortValuelong[short] = long
 
-	if err := s.saveRecord(short, long); err != nil {
+	rec := Record{
+		UUID:        "",
+		ShortURL:    short,
+		OriginalURL: longURL,
+		UserID:      "",
+	}
+	s.keyShortValuelong[short] = rec
+
+	if err := s.saveRecord(rec); err != nil {
 		middleware.Log.Error().Err(err).Msg("Error saving record to file")
 	}
 	return short, true
 }
 
+// Вспомогательный метод для тестов
 func (s *Storage) Get(short string) (string, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	long, ok := s.keyShortValuelong[short]
-	return long, ok
+
+	rec, ok := s.keyShortValuelong[short]
+	if !ok {
+		return "", false
+	}
+	return rec.OriginalURL, true
 }
