@@ -17,7 +17,7 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/store"
 )
 
-const version = "iter12"
+const version = "iter14"
 
 func main() {
 	middleware.Initialize("info", version)

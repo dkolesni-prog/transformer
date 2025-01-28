@@ -24,23 +24,45 @@ func InitAuth(secret string) {
 	secretKey = []byte(secret)
 }
 
-// AuthMiddleware ...
+// AuthMiddleware проверяет куку.
+// Если запрос => GET /api/user/urls, то при отсутствии/битой куке отдать 401 (не генерировать новый userID).
+// Иначе (другие запросы) — как раньше, генерируем новую куку при отсутствии.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
-		var userID string
 
+		// Проверяем: если это GET /api/user/urls
+		if r.Method == http.MethodGet && r.URL.Path == "/api/user/urls" {
+			// Если куки нет => 401
+			if err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			// Кука есть, но проверяем подпись
+			userID, parseErr := parseSignedValue(c.Value)
+			if parseErr != nil || userID == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			// Всё ок, кладём userID в контекст
+			ctx := context.WithValue(r.Context(), "userID", userID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
+
+		// Иначе (POST /, POST /api/shorten, …) — логика "старого"кода (...iter13] ):
+		var userID string
 		if err != nil {
-			// Нет куки
+			// Если нет куки => сгенерировать новый userID
 			userID = generateNewUserID()
 			setUserIDCookie(w, userID)
 		} else {
-			parsedUser, parseErr := parseSignedValue(c.Value)
-			if parseErr != nil {
+			// Кука есть, но может быть битая
+			userID, err = parseSignedValue(c.Value)
+			if err != nil {
+				// подпись не верна => генерим новый
 				userID = generateNewUserID()
 				setUserIDCookie(w, userID)
-			} else {
-				userID = parsedUser
 			}
 		}
 
@@ -50,7 +72,6 @@ func AuthMiddleware(next http.Handler) http.Handler {
 }
 
 func generateNewUserID() string {
-	// Убрали rand.Seed(...)
 	return fmt.Sprintf("U%d_%d", rand.Intn(9999999), time.Now().UnixNano())
 }
 
@@ -80,7 +101,6 @@ func parseSignedValue(value string) (string, error) {
 	userID := parts[0]
 	signature := parts[1]
 
-	// Считаем ожидаемый сигнат
 	mac := hmac.New(sha256.New, secretKey)
 	_, _ = io.WriteString(mac, userID)
 	expectedSig := hex.EncodeToString(mac.Sum(nil))
