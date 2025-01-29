@@ -182,7 +182,7 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		urls = append(urls, parsed)
 		corrMap[parsed] = rItem.CorrelationID
 	}
-	userID, _ := r.Context().Value("userID").(string)
+	userID, _ := middleware.GetUserID(r)
 	shorts, err := s.SaveBatch(r.Context(), userID, urls, cfg)
 	if err != nil {
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
@@ -225,7 +225,7 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		return
 	}
 
-	userID, _ := r.Context().Value("userID").(string)
+	userID, _ := middleware.GetUserID(r)
 	res, saveErr := s.Save(r.Context(), userID, parsed, cfg)
 	if saveErr != nil {
 		if strings.Contains(saveErr.Error(), "conflict") {
@@ -273,7 +273,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		return
 	}
 
-	userID, _ := r.Context().Value("userID").(string)
+	userID, _ := middleware.GetUserID(r)
 	shortU, saveErr := s.Save(r.Context(), userID, parsed, cfg)
 	if saveErr != nil {
 		if strings.Contains(saveErr.Error(), "conflict") {
