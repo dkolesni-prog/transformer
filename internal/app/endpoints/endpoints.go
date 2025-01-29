@@ -74,7 +74,11 @@ func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 	userIDAny := r.Context().Value("userID")
 	userID, ok := userIDAny.(string)
 	if !ok || userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "unauthorized",
+		})
 		return
 	}
 
@@ -104,7 +108,11 @@ func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *con
 	userID, ok := middleware.GetUserID(r)
 
 	if !ok || userID == "" {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"error": "unauthorized",
+		})
 		return
 	}
 

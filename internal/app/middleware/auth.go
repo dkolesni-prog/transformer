@@ -47,7 +47,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 				return
 			}
 			// Всё ок, кладём userID в контекст
-			ctx := context.WithValue(r.Context(), "userID", userID)
+			ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
