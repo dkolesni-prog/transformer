@@ -17,14 +17,12 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/helpers"
 )
 
-// Record ...
 type Record struct {
 	UUID        string `json:"uuid"`
 	ShortURL    string `json:"short_url"`
 	OriginalURL string `json:"original_url"`
 	UserID      string `json:"user_id"`
-	// Для простоты: признак удаления
-	IsDeleted bool `json:"is_deleted"`
+	IsDeleted   bool   `json:"is_deleted"`
 }
 
 type Storage struct {
@@ -46,7 +44,6 @@ func NewStorage(cfg *config.Config) *Storage {
 }
 
 func (s *Storage) Bootstrap(ctx context.Context) error {
-	// Для file-хранилища не требуется
 	return nil
 }
 
@@ -101,7 +98,6 @@ func (s *Storage) SaveBatch(ctx context.Context, userID string, urls []*url.URL,
 	return results, nil
 }
 
-// LoadFull вернёт (URL, isDeleted, error).
 func (s *Storage) LoadFull(ctx context.Context, shortID string) (*url.URL, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -162,7 +158,6 @@ func (s *Storage) Close(ctx context.Context) error {
 	return nil
 }
 
-// loadFromFile
 func (s *Storage) loadFromFile() error {
 	f, err := os.Open(s.filePath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -189,7 +184,6 @@ func (s *Storage) loadFromFile() error {
 	return nil
 }
 
-// saveRecord
 func (s *Storage) saveRecord(rec Record) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
@@ -221,7 +215,7 @@ func (s *Storage) SetIfAbsent(short, longURL string) (string, bool) {
 	rec := Record{
 		ShortURL:    short,
 		OriginalURL: longURL,
-		UserID:      "", // тест не задаёт
+		UserID:      "", // тест не задаёт.
 	}
 	s.keyShortValuelong[short] = rec
 
@@ -230,5 +224,3 @@ func (s *Storage) SetIfAbsent(short, longURL string) (string, bool) {
 	}
 	return short, true
 }
-
-// ensureSlash

@@ -1,5 +1,6 @@
-// internal/app/endpoints/endpoints.go
 package endpoints
+
+// internal/app/endpoints/endpoints.go.
 
 import (
 	"context"
@@ -13,7 +14,6 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/config"
 	"github.com/dkolesni-prog/transformer/internal/store"
-
 	"github.com/go-chi/chi/v5"
 )
 
@@ -29,7 +29,7 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 	r.Use(middleware.WithLogging, middleware.GzipMiddleware)
 	r.Use(middleware.AuthMiddleware)
 
-	// Сокращение URL
+	// Сокращение URL.
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURL(w, r, s, cfg)
 	})
@@ -38,32 +38,32 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 		ShortenURLJSON(w, r, s, cfg)
 	})
 
-	// Batch
+	// Batch.
 	r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
 		ShortenBatch(w, r, s, cfg)
 	})
 
-	// Удаление (DELETE /api/user/urls)
+	// Удаление (DELETE /api/user/urls).
 	r.Delete("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
 		DeleteUserURLs(w, r, s)
 	})
 
-	// Список "своих" ссылок
+	// Список "своих" ссылок.
 	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
 		GetUserURLs(w, r, s, cfg)
 	})
 
-	// GET /{id}
+	// GET /{id}.
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 		GetFullURL(w, r, s)
 	})
 
-	// Ping
+	// Ping.
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
 		Ping(w, r, s)
 	})
 
-	// Версия
+	// Версия.
 	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
 		GetVersion(w, r, version)
 	})
@@ -71,7 +71,7 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 	return r
 }
 
-// DeleteUserURLs удаляет ссылки
+// DeleteUserURLs удаляет ссылки.
 func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 	userID, ok := middleware.GetUserID(r)
 	fmt.Printf("[DEBUG DeleteUserURLs] => got userID=%q ok=%v\n", userID, ok)
@@ -85,7 +85,7 @@ func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 		return
 	}
 
-	// Считываем массив shortIDs
+	// Считываем массив shortIDs.
 	var toDelete []string
 	if err := json.NewDecoder(r.Body).Decode(&toDelete); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -93,7 +93,7 @@ func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 	}
 	defer r.Body.Close()
 
-	// Асинхронно помечаем ссылки удалёнными:
+	// Асинхронно помечаем ссылки удалёнными:.
 	go func() {
 		bg := context.Background()
 		err := s.DeleteBatch(bg, userID, toDelete)
@@ -134,7 +134,7 @@ func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *con
 	}
 }
 
-// GetFullURL — проверка удалён/не удалён
+// GetFullURL — проверка удалён/не удалён.
 func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
 	id := chi.URLParam(r, "id")
 

@@ -38,7 +38,6 @@ func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 	return &RDB{pool: pool}, nil
 }
 
-// Bootstrap — создаём таблицу, если нет. Добавьте is_deleted bool, если нужно.
 func (r *RDB) Bootstrap(ctx context.Context) error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS short_urls (
@@ -68,7 +67,6 @@ CREATE TABLE IF NOT EXISTS short_urls (
 	return nil
 }
 
-// Save — создаём одну запись.
 func (r *RDB) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randLen = 8
@@ -90,7 +88,7 @@ RETURNING short_id;
 		if err == nil {
 			return ensureSlash(cfg.BaseURL) + shortID, nil
 		}
-		// Если вернулся pgx.ErrNoRows => значит CONFLICT
+		// Если вернулся pgx.ErrNoRows => значит CONFLICT.
 		if errors.Is(err, pgx.ErrNoRows) {
 			var existingID string
 			confSQL := `SELECT short_id FROM short_urls WHERE original_url=$1;`
@@ -102,7 +100,6 @@ RETURNING short_id;
 	return "", errors.New("failed to generate a unique short_id after retries")
 }
 
-// LoadFull — возвращает URL + isDeleted + ошибку.
 func (r *RDB) LoadFull(ctx context.Context, shortID string) (*url.URL, bool, error) {
 	const sqlSelect = `
 SELECT original_url, is_deleted
@@ -127,7 +124,6 @@ WHERE short_id = $1;
 	return parsed, isDel, nil
 }
 
-// SaveBatch — сохраняем несколько ссылок.
 func (r *RDB) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	const maxRetries = 5
 	const randLen = 8
@@ -229,7 +225,6 @@ func (r *RDB) Close(ctx context.Context) error {
 	return nil
 }
 
-// ensureSlash — вспомогательная функция
 func ensureSlash(baseURL string) string {
 	if !strings.HasSuffix(baseURL, "/") {
 		return baseURL + "/"

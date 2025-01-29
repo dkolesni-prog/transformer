@@ -20,7 +20,7 @@ type MemoryRecord struct {
 
 type MemoryStorage struct {
 	mu   sync.Mutex
-	data map[string]MemoryRecord // short -> MemoryRecord
+	data map[string]MemoryRecord
 }
 
 func NewMemoryStorage() *MemoryStorage {

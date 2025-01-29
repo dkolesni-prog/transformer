@@ -66,7 +66,7 @@ func WithLogging(h http.Handler) http.Handler {
 
 		ww := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
-		// обработка запроса
+		// обработка запроса.
 		h.ServeHTTP(ww, r)
 
 		duration := time.Since(start)

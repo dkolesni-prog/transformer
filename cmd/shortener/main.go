@@ -1,11 +1,10 @@
-// Cmd/shortener/main.go
 package main
+
+// Cmd/shortener/main.go.
 
 import (
 	"context"
 	"errors"
-	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
-	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +12,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
+	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/config"
 	"github.com/dkolesni-prog/transformer/internal/helpers"
 	"github.com/dkolesni-prog/transformer/internal/store"
@@ -65,7 +66,7 @@ func run() error {
 	sig := <-stop
 	middleware.Log.Info().Msgf("Received signal %v. Shutting down the server...", sig)
 
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1*time.Second) // was: 5*time.Second
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
@@ -78,7 +79,7 @@ func run() error {
 
 }
 
-//nolint:unparam  // Retaining error return for bc if removed. the main is red
+//nolint:unparam  // Retaining error return for bc if removed. the main is red.
 func newStorage(ctx context.Context, cfg *config.Config) (store.Store, error) {
 
 	middleware.Log.Info().

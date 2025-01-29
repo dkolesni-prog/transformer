@@ -91,7 +91,7 @@ func TestEndpoints(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Если нужно — подготавливаем тестовое окружение
+			// Если нужно — подготавливаем тестовое окружение.
 			if tt.setup != nil {
 				tt.setup(storage)
 			}
@@ -122,7 +122,7 @@ func TestEndpoints(t *testing.T) {
 				t.Errorf("got status code %d, want %d", rec.Code, tt.wantCode)
 			}
 
-			// Доп.проверка для batch-эндпоинта
+			// Доп.проверка для batch-эндпоинта.
 			if tt.method == http.MethodPost && strings.Contains(tt.url, "/batch") {
 				var results []map[string]string
 				err := json.Unmarshal(rec.Body.Bytes(), &results)
@@ -152,7 +152,7 @@ func TestGzipHandling(t *testing.T) {
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
-	// =========== SUB-TEST #1: GZIPPED REQUEST, PLAIN RESPONSE ===========
+	// =========== SUB-TEST #1: GZIPPED REQUEST, PLAIN RESPONSE ===========.
 	t.Run("GzippedRequest_PlainResponse", func(t *testing.T) {
 		httpClient := &http.Client{
 			Transport: &http.Transport{
@@ -179,7 +179,7 @@ func TestGzipHandling(t *testing.T) {
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
 
-		dump, _ := httputil.DumpResponse(resp.RawResponse, false) // Читаем только заголовки
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false) // Читаем только заголовки.
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
 
 		rawBody, err := io.ReadAll(resp.RawResponse.Body)
@@ -192,7 +192,7 @@ func TestGzipHandling(t *testing.T) {
 		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
 
-	// =========== SUB-TEST #2: PLAIN REQUEST, GZIPPED RESPONSE ===========
+	// =========== SUB-TEST #2: PLAIN REQUEST, GZIPPED RESPONSE ===========.
 	t.Run("PlainRequest_GzippedResponse", func(t *testing.T) {
 		client := resty.New().
 			SetBaseURL(ts.URL).

@@ -8,7 +8,6 @@ import (
 	"github.com/dkolesni-prog/transformer/internal/config"
 )
 
-// Store — обновлённый интерфейс.
 // Вместо Load(...) теперь LoadFull(...) возвращает (URL, isDeleted, error).
 type Store interface {
 	Save(ctx context.Context, userID string, url *url.URL, cfg *config.Config) (string, error)

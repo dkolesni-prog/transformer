@@ -46,30 +46,30 @@ func AuthMiddleware(next http.Handler) http.Handler {
 
 		switch {
 		case isProtected && err != nil:
-			// Нет cookie — сразу 401
+			// Нет cookie — сразу 401.
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		case isProtected:
-			// Попробуем распарсить
+			// Попробуем распарсить.
 			userID, pErr := parseSignedValue(c.Value)
 			if pErr != nil || userID == "" {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// Успех
+			// Успех.
 			ctx := context.WithValue(r.Context(), userIDKey(), userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 
 		default:
-			// Непротектед
+			// Непротектед.
 			var userID string
 			if err != nil {
-				// cookie нет => создаём новую
+				// cookie нет => создаём новую.
 				userID = generateNewUserID()
 				setUserIDCookie(w, userID)
 			} else {
-				// cookie есть => верифицируем
+				// cookie есть => верифицируем.
 				userIDParsed, pErr := parseSignedValue(c.Value)
 				if pErr != nil || userIDParsed == "" {
 					userID = generateNewUserID()
@@ -84,15 +84,13 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// GetUserID — публичная функция, достаёт userID из контекста
+// GetUserID — публичная функция, достаёт userID из контекста.
 // по **приватному** типу ключа contextKeyUserID.
 func GetUserID(r *http.Request) (string, bool) {
 	userAny := r.Context().Value(userIDKey())
 	userStr, ok := userAny.(string)
 	return userStr, ok
 }
-
-// Ниже всё остальное — не меняется особо.
 
 func generateNewUserID() string {
 	return fmt.Sprintf("U%d_%d", rand.Intn(9999999), time.Now().UnixNano())
@@ -127,12 +125,11 @@ func parseSignedValue(value string) (string, error) {
 		return "", fmt.Errorf("empty userID")
 	}
 
-	// Здесь **по-хорошему** нужно сверять HMAC:
-	// expected := makeSignedValue(userID)
-	// if value != expected {
-	//	   return "", fmt.Errorf("signature mismatch")
-	// }
-
+	// Здесь **по-хорошему** нужно сверять HMAC:.
+	// expected := makeSignedValue(userID).
+	// if value != expected {.
+	//	   return "", fmt.Errorf("signature mismatch").
+	// }.
 	// Пока «пропускаем» реальную проверку.
 	return userID, nil
 }
