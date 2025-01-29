@@ -53,3 +53,5 @@ func NewConfig() *Config {
 	}
 	return &cfg
 }
+
+//postgres://postgres:postgres@postgres:5432/praktikum?sslmode=disable
