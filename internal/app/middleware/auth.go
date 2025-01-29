@@ -33,43 +33,45 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
 
-		// Проверяем: если это GET /api/user/urls
-		if r.Method == http.MethodGet && r.URL.Path == "/api/user/urls" {
-			// Если куки нет => 401
+		// We want "GET /api/user/urls" AND "DELETE /api/user/urls" to require a valid cookie, or 401.
+		isUserUrls := (r.URL.Path == "/api/user/urls")
+		isProtected := isUserUrls && (r.Method == http.MethodGet || r.Method == http.MethodDelete)
+
+		if isProtected {
+			// 1) If there's NO cookie => 401
 			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// Кука есть, но проверяем подпись
+			// 2) If the cookie signature fails => 401
 			userID, parseErr := parseSignedValue(c.Value)
 			if parseErr != nil || userID == "" {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// Всё ок, кладём userID в контекст
+			// 3) All good => put userID in context and proceed
 			ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
 		}
 
-		// Иначе (POST /, POST /api/shorten, …) — логика "старого"кода (...iter13] ):
+		// ELSE: For other routes => the "auto-generate" logic
 		var userID string
 		if err != nil {
-			// Если нет куки => сгенерировать новый userID
+			// no cookie => generate new user ID
 			userID = generateNewUserID()
 			setUserIDCookie(w, userID)
 		} else {
-			// Кука есть, но может быть битая
+			// cookie is present => parse it
 			userID, err = parseSignedValue(c.Value)
 			if err != nil {
-				// подпись не верна => генерим новый
+				// if invalid => generate new user ID
 				userID = generateNewUserID()
 				setUserIDCookie(w, userID)
 			}
 		}
 
 		ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
-
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
