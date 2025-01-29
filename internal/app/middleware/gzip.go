@@ -108,7 +108,6 @@ func GzipMiddleware(h http.Handler) http.Handler {
 
 		log.Println("accept-encoding", r.Header.Get("Accept-Encoding"))
 		log.Println("content-encoding", r.Header.Get("Content-Encoding"))
-		log.Println("now processing gzip middleware")
 
 		ow := w
 
