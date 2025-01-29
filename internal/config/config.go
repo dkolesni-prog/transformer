@@ -27,7 +27,7 @@ func NewConfig() *Config {
 		flag.StringVar(&cfg.RunAddr, "a", ":8080", "address and port to run server")
 		flag.StringVar(&cfg.BaseURL, "b", "http://localhost:8080/", "base URL for shortened links")
 		flag.StringVar(&cfg.FileStoragePath, "f", "shortener_data.json", "path to file with shortener data")
-		flag.StringVar(&cfg.DatabaseDSN, "d", "postgres://postgres:doo6k4aeN@localhost:5432/transformer_dev?sslmode=disable", "connection string to database")
+		flag.StringVar(&cfg.DatabaseDSN, "d", "postgres://postgres:postgres@postgres:5432/praktikum?sslmode=disable", "connection string to database")
 		flag.StringVar(&cfg.SecretKey, "secret", "", "secret key for cookie signing")
 		flag.Parse()
 	})
@@ -55,3 +55,4 @@ func NewConfig() *Config {
 }
 
 //postgres://postgres:postgres@postgres:5432/praktikum?sslmode=disable
+//postgres://postgres:doo6k4aeN@localhost:5432/transformer_dev?sslmode=disable
