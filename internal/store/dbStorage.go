@@ -55,7 +55,9 @@ CREATE TABLE IF NOT EXISTS short_urls (
 	if err != nil {
 		return fmt.Errorf("cannot begin tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
+	defer func() {
+		_ = tx.Rollback(ctx)
+	}()
 
 	if _, execErr := tx.Exec(ctx, schema); execErr != nil {
 		return fmt.Errorf("cannot create table: %w", execErr)
@@ -135,7 +137,7 @@ func (r *RDB) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() {
-		_ = tx.Rollback(ctx) // игнорируем ошибку, если уже коммит
+		_ = tx.Rollback(ctx)
 	}()
 
 	var results []string

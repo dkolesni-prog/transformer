@@ -100,8 +100,9 @@ func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 }
 
 func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
-	userIDAny := r.Context().Value("userID")
-	userID, ok := userIDAny.(string)
+
+	userID, ok := middleware.GetUserID(r)
+
 	if !ok || userID == "" {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return

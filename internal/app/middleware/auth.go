@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -14,6 +13,9 @@ import (
 	"strings"
 	"time"
 )
+
+// Чтобы не ругался staticcheck SA1029 (и revive)
+type contextKeyUserID struct{}
 
 const cookieName = "UserID"
 
@@ -66,7 +68,8 @@ func AuthMiddleware(next http.Handler) http.Handler {
 			}
 		}
 
-		ctx := context.WithValue(r.Context(), "userID", userID)
+		ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
@@ -96,17 +99,20 @@ func makeSignedValue(userID string) string {
 func parseSignedValue(value string) (string, error) {
 	parts := strings.SplitN(value, ":", 2)
 	if len(parts) != 2 {
-		return "", errors.New("invalid cookie format")
+		return "", fmt.Errorf("invalid cookie format")
 	}
 	userID := parts[0]
 	signature := parts[1]
-
-	mac := hmac.New(sha256.New, secretKey)
-	_, _ = io.WriteString(mac, userID)
-	expectedSig := hex.EncodeToString(mac.Sum(nil))
-
-	if signature != expectedSig {
-		return "", errors.New("invalid signature")
+	expected := makeSignedValue(userID)
+	if value != expected {
+		return "", fmt.Errorf("invalid signature")
 	}
+	_ = signature // чтоб не было «unused»
 	return userID, nil
+}
+
+func GetUserID(r *http.Request) (string, bool) {
+	idAny := r.Context().Value(contextKeyUserID{})
+	idStr, ok := idAny.(string)
+	return idStr, ok
 }
