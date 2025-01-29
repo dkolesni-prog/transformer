@@ -2,6 +2,7 @@
 package endpoints
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -94,14 +95,12 @@ func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 
 	// Асинхронно помечаем ссылки удалёнными:
 	go func() {
-		err := s.DeleteBatch(r.Context(), userID, toDelete)
+		bg := context.Background()
+		err := s.DeleteBatch(bg, userID, toDelete)
 		if err != nil {
-			middleware.Log.Error().Err(err).
-				Strs("shortIDs", toDelete).
-				Msg("Failed to mark URLs as deleted")
+			middleware.Log.Error().Err(err).Msg("Failed to mark URLs as deleted")
 		}
 	}()
-
 	w.WriteHeader(http.StatusAccepted)
 }
 
