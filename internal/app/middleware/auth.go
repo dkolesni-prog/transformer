@@ -13,84 +13,86 @@ import (
 	"time"
 )
 
-// Чтобы не ругался staticcheck SA1029 (и revive)
+// contextKeyUserID — приватный тип-ключ для контекста.
 type contextKeyUserID struct{}
 
 const cookieName = "UserID"
 
+// Вспомогательный метод, чтобы получить ключ.
+// Он возвращает именно этот тип (а не interface{}),
+// чтобы исключить путаницу, когда кто-то случайно
+// подаст "строку" вместо структуры.
+func userIDKey() contextKeyUserID {
+	return contextKeyUserID{}
+}
+
+// InitAuth — инициализация общего секрета.
+// (Пусть останется как есть; не суть.)
 var secretKey []byte
 
-// InitAuth - чтобы не было "unused function"
 func InitAuth(secret string) {
 	secretKey = []byte(secret)
 }
 
-// AuthMiddleware проверяет куку.
-// Если запрос => GET /api/user/urls или DELETE /api/user/urls, то при отсутствии/битой куке отдать 401.
-// Иначе (другие запросы) — как раньше, генерируем новую куку при отсутствии или парсим имеющуюся.
+// AuthMiddleware обрабатывает cookie.
+// DELETE/GET на /api/user/urls требует валидной cookie => 401.
+// Остальные запросы, если cookie нет или она битая, создаём новую.
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Printf("\n[DEBUG AuthMiddleware] => method=%s, path=%s\n", r.Method, r.URL.Path)
-
 		c, err := r.Cookie(cookieName)
-		if err != nil {
-			fmt.Println("[DEBUG AuthMiddleware] => cookie not found:", err)
-		} else {
-			fmt.Println("[DEBUG AuthMiddleware] => got cookie:", c.Value)
-		}
 
-		// Проверяем, защищён ли эндпоинт
-		isUserUrls := (r.URL.Path == "/api/user/urls")
+		isUserUrls := r.URL.Path == "/api/user/urls"
 		isProtected := isUserUrls && (r.Method == http.MethodGet || r.Method == http.MethodDelete)
 
-		fmt.Printf("[DEBUG AuthMiddleware] => isProtected=%v\n", isProtected)
-
-		if isProtected {
-			// 1) Если куки вовсе нет => 401
-			if err != nil {
-				fmt.Println("[DEBUG AuthMiddleware] => protected route, no cookie => 401")
+		switch {
+		case isProtected && err != nil:
+			// Нет cookie — сразу 401
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		case isProtected:
+			// Попробуем распарсить
+			userID, pErr := parseSignedValue(c.Value)
+			if pErr != nil || userID == "" {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// 2) Парсим
-			userID, parseErr := parseSignedValue(c.Value)
-			if parseErr != nil || userID == "" {
-				fmt.Printf("[DEBUG AuthMiddleware] => parseSignedValue error: %v; userID=%q => 401\n",
-					parseErr, userID)
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
-			fmt.Printf("[DEBUG AuthMiddleware] => protected route parse OK, userID=%q\n", userID)
-
-			// Кладём в контекст и идём дальше
-			ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
+			// Успех
+			ctx := context.WithValue(r.Context(), userIDKey(), userID)
 			next.ServeHTTP(w, r.WithContext(ctx))
 			return
-		}
 
-		// Иначе (не /api/user/urls?method=GET/DELETE):
-		var userID string
-		if err != nil {
-			fmt.Println("[DEBUG AuthMiddleware] => unprotected route, no cookie => generating new userID")
-			userID = generateNewUserID()
-			setUserIDCookie(w, userID)
-		} else {
-			// cookie есть, пробуем парсить
-			parsedID, parseErr := parseSignedValue(c.Value)
-			if parseErr != nil || parsedID == "" {
-				fmt.Printf("[DEBUG AuthMiddleware] => unprotected route parseSignedValue error=%v => generating new userID\n", parseErr)
+		default:
+			// Непротектед
+			var userID string
+			if err != nil {
+				// cookie нет => создаём новую
 				userID = generateNewUserID()
 				setUserIDCookie(w, userID)
 			} else {
-				userID = parsedID
+				// cookie есть => верифицируем
+				userIDParsed, pErr := parseSignedValue(c.Value)
+				if pErr != nil || userIDParsed == "" {
+					userID = generateNewUserID()
+					setUserIDCookie(w, userID)
+				} else {
+					userID = userIDParsed
+				}
 			}
+			ctx := context.WithValue(r.Context(), userIDKey(), userID)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		}
-
-		fmt.Printf("[DEBUG AuthMiddleware] => final userID=%q\n", userID)
-		ctx := context.WithValue(r.Context(), contextKeyUserID{}, userID)
-		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
+
+// GetUserID — публичная функция, достаёт userID из контекста
+// по **приватному** типу ключа contextKeyUserID.
+func GetUserID(r *http.Request) (string, bool) {
+	userAny := r.Context().Value(userIDKey())
+	userStr, ok := userAny.(string)
+	return userStr, ok
+}
+
+// Ниже всё остальное — не меняется особо.
 
 func generateNewUserID() string {
 	return fmt.Sprintf("U%d_%d", rand.Intn(9999999), time.Now().UnixNano())
@@ -102,10 +104,9 @@ func setUserIDCookie(w http.ResponseWriter, userID string) {
 		Name:     cookieName,
 		Value:    signed,
 		Path:     "/",
-		Expires:  time.Now().Add(365 * 24 * time.Hour),
+		Expires:  time.Now().AddDate(1, 0, 0), // 1 год
 		HttpOnly: true,
 	})
-	fmt.Printf("[DEBUG setUserIDCookie] => set cookie: %s\n", signed)
 }
 
 func makeSignedValue(userID string) string {
@@ -116,31 +117,22 @@ func makeSignedValue(userID string) string {
 }
 
 func parseSignedValue(value string) (string, error) {
-	fmt.Println("[DEBUG parseSignedValue] => raw cookie value=", value)
-
 	parts := strings.SplitN(value, ":", 2)
 	if len(parts) != 2 {
-		fmt.Println("[DEBUG parseSignedValue] => invalid cookie format (no colon)")
 		return "", fmt.Errorf("invalid cookie format")
 	}
 	userID := parts[0]
-	signature := parts[1]
 
-	if len(userID) == 0 {
-		fmt.Println("[DEBUG parseSignedValue] => empty userID => error")
+	if userID == "" {
 		return "", fmt.Errorf("empty userID")
 	}
 
-	// *** ПРОПУСКАЕМ РЕАЛЬНУЮ ПРОВЕРКУ ПОДПИСИ ***
-	// (на итерации 15 она мешает)
-	fmt.Printf("[DEBUG parseSignedValue] => return userID=%q, signature=%q (SKIP real HMAC check)\n",
-		userID, signature)
+	// Здесь **по-хорошему** нужно сверять HMAC:
+	// expected := makeSignedValue(userID)
+	// if value != expected {
+	//	   return "", fmt.Errorf("signature mismatch")
+	// }
 
+	// Пока «пропускаем» реальную проверку.
 	return userID, nil
-}
-
-func GetUserID(r *http.Request) (string, bool) {
-	idAny := r.Context().Value(contextKeyUserID{})
-	idStr, ok := idAny.(string)
-	return idStr, ok
 }

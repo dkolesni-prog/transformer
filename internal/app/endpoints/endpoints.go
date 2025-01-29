@@ -72,8 +72,7 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 
 // DeleteUserURLs удаляет ссылки
 func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
-	userIDAny := r.Context().Value("userID")
-	userID, ok := userIDAny.(string)
+	userID, ok := middleware.GetUserID(r)
 	fmt.Printf("[DEBUG DeleteUserURLs] => got userID=%q ok=%v\n", userID, ok)
 
 	if !ok || userID == "" {
