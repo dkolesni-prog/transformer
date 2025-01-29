@@ -3,6 +3,7 @@ package endpoints
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -73,6 +74,8 @@ func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 	userIDAny := r.Context().Value("userID")
 	userID, ok := userIDAny.(string)
+	fmt.Printf("[DEBUG DeleteUserURLs] => got userID=%q ok=%v\n", userID, ok)
+
 	if !ok || userID == "" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
