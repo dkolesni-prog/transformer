@@ -88,12 +88,12 @@ func (c *compressReader) Read(p []byte) (int, error) {
 
 func (c *compressReader) Close() error {
 	if err := c.zr.Close(); err != nil {
-		Log.Error().Err(err).Msg("Failed to close gzip reader THISISTHEMARKTHATGZIPDATAOK")
+		Log.Error().Err(err).Msg("Failed to close gzip reader")
 		return err
 	}
 	if err := c.r.Close(); err != nil {
 		log.Println("Failed to close underlying reader", err)
-		Log.Error().Err(err).Msg("Failed to close underlying reader THISISTHEMARKTHATGZIPDATAOK")
+		Log.Error().Err(err).Msg("Failed to close underlying reader")
 		return err
 	}
 	return nil
@@ -159,8 +159,6 @@ func GzipMiddleware(h http.Handler) http.Handler {
 				log.Println("Status code is unknown (WriteHeader may not have been called yet)")
 			}
 		}
-		log.Println("MARK")
 		h.ServeHTTP(ow, r)
-		log.Println("MARK2")
 	})
 }
