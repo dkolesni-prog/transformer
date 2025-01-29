@@ -1,4 +1,4 @@
-// Cmd/shortener/main_test.go
+// Cmd/shortener/main_test.go.
 package main
 
 import (
@@ -44,7 +44,7 @@ func TestEndpoints(t *testing.T) {
 			body:     "https://example.com",
 			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
-			wantBody: cfg.BaseURL, // Проверяем, что ответ содержит базовый URL
+			wantBody: cfg.BaseURL,
 			wantHeader: map[string]string{
 				"Content-Type": "text/plain; charset=utf-8",
 			},
@@ -54,12 +54,12 @@ func TestEndpoints(t *testing.T) {
 			method: http.MethodPost,
 			url:    "/api/shorten/batch",
 			body: `[
-				{"correlation_id":"1", "original_url":"https://example1.com"}, 
+				{"correlation_id":"1", "original_url":"https://example1.com"},
 				{"correlation_id":"2", "original_url":"https://example2.com"}
 			]`,
 			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
-			wantBody: `[{"correlation_id":"1", "short_url":"`, // Проверяем, что в ответе есть такой префикс
+			wantBody: `[{"correlation_id":"1", "short_url":"`,
 			wantHeader: map[string]string{
 				"Content-Type": "application/json; charset=utf-8",
 			},
@@ -88,23 +88,18 @@ func TestEndpoints(t *testing.T) {
 			wantBody: "Short URL not found\n",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Если нужно — подготавливаем тестовое окружение.
 			if tt.setup != nil {
 				tt.setup(storage)
 			}
-
 			var req *http.Request
 			if tt.body != "" {
 				req = httptest.NewRequest(tt.method, tt.url, strings.NewReader(tt.body))
 			} else {
 				req = httptest.NewRequest(tt.method, tt.url, http.NoBody)
 			}
-
 			rec := httptest.NewRecorder()
-
 			r := chi.NewRouter()
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 				endpoints.ShortenURL(w, r, storage, cfg)
@@ -115,26 +110,20 @@ func TestEndpoints(t *testing.T) {
 			r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
 				endpoints.ShortenBatch(w, r, storage, cfg)
 			})
-
 			r.ServeHTTP(rec, req)
-
 			if rec.Code != tt.wantCode {
 				t.Errorf("got status code %d, want %d", rec.Code, tt.wantCode)
 			}
-
-			// Доп.проверка для batch-эндпоинта.
 			if tt.method == http.MethodPost && strings.Contains(tt.url, "/batch") {
 				var results []map[string]string
 				err := json.Unmarshal(rec.Body.Bytes(), &results)
 				require.NoError(t, err, "Failed to unmarshal batch response")
-
 				for _, result := range results {
 					assert.Contains(t, result["short_url"], cfg.BaseURL, "Short URL should start with base URL")
 				}
 			} else if tt.wantBody != "" && !strings.HasPrefix(rec.Body.String(), tt.wantBody) {
 				t.Errorf("got body %q, want prefix %q", rec.Body.String(), tt.wantBody)
 			}
-
 			for key, wantValue := range tt.wantHeader {
 				gotValue := rec.Header().Get(key)
 				if gotValue != wantValue {
@@ -152,7 +141,6 @@ func TestGzipHandling(t *testing.T) {
 	ts := httptest.NewServer(router)
 	defer ts.Close()
 
-	// =========== SUB-TEST #1: GZIPPED REQUEST, PLAIN RESPONSE ===========.
 	t.Run("GzippedRequest_PlainResponse", func(t *testing.T) {
 		httpClient := &http.Client{
 			Transport: &http.Transport{
@@ -178,26 +166,21 @@ func TestGzipHandling(t *testing.T) {
 			SetBody(gzippedBody.Bytes()).
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
-
-		dump, _ := httputil.DumpResponse(resp.RawResponse, false) // Читаем только заголовки.
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
-
 		rawBody, err := io.ReadAll(resp.RawResponse.Body)
 		require.NoError(t, err, "Failed to read raw response body")
 		require.False(t, isGzipData(rawBody), "Expected plain JSON")
-
 		var respData map[string]string
 		err = json.Unmarshal(rawBody, &respData)
 		require.NoError(t, err, "Failed to parse plain JSON response")
 		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
 
-	// =========== SUB-TEST #2: PLAIN REQUEST, GZIPPED RESPONSE ===========.
 	t.Run("PlainRequest_GzippedResponse", func(t *testing.T) {
 		client := resty.New().
 			SetBaseURL(ts.URL).
 			SetRedirectPolicy(resty.NoRedirectPolicy())
-
 		body := `{"url":"https://example.com"}`
 		resp, err := client.R().
 			SetHeader("Content-Type", "application/json").
@@ -206,30 +189,23 @@ func TestGzipHandling(t *testing.T) {
 			SetBody([]byte(body)).
 			Post("/api/shorten")
 		require.NoError(t, err, "Request failed")
-
 		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
 		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
-
 		require.Equal(t, http.StatusCreated, resp.StatusCode())
 		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected gzipped response")
-
 		rawBytes, err := io.ReadAll(resp.RawResponse.Body)
 		require.NoError(t, err, "Failed to read raw body")
-
 		gzr, err := gzip.NewReader(bytes.NewReader(rawBytes))
 		require.NoError(t, err, "Failed to create gzip reader")
 		decompressedBody, err := io.ReadAll(gzr)
 		require.NoError(t, err, "Failed to decompress gzip response")
-
 		var respData map[string]string
 		err = json.Unmarshal(decompressedBody, &respData)
 		require.NoError(t, err, "Failed to unmarshal response JSON")
 		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
-
 }
 
-// isGzipData is just a convenience function to see if bytes begin with the gzip magic number.
 func isGzipData(data []byte) bool {
 	return len(data) >= 2 && data[0] == 0x1F && data[1] == 0x8B
 }

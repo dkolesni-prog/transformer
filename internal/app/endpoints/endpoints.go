@@ -1,6 +1,5 @@
+// Internal/app/endpoints/endpoints.go.
 package endpoints
-
-// internal/app/endpoints/endpoints.go.
 
 import (
 	"context"
@@ -11,10 +10,11 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/dkolesni-prog/transformer/internal/app/middleware"
 	"github.com/dkolesni-prog/transformer/internal/config"
 	"github.com/dkolesni-prog/transformer/internal/store"
-	"github.com/go-chi/chi/v5"
 )
 
 const (
@@ -24,120 +24,92 @@ const (
 	contentTypeText     = "text/plain; charset=utf-8"
 )
 
+// NewRouter creates and returns the main chi.Router.
 func NewRouter(cfg *config.Config, s store.Store, version string) http.Handler {
 	r := chi.NewRouter()
 	r.Use(middleware.WithLogging, middleware.GzipMiddleware)
 	r.Use(middleware.AuthMiddleware)
 
-	// Сокращение URL.
 	r.Post("/", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURL(w, r, s, cfg)
 	})
-
 	r.Post("/api/shorten", func(w http.ResponseWriter, r *http.Request) {
 		ShortenURLJSON(w, r, s, cfg)
 	})
-
-	// Batch.
 	r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
 		ShortenBatch(w, r, s, cfg)
 	})
-
-	// Удаление (DELETE /api/user/urls).
 	r.Delete("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
 		DeleteUserURLs(w, r, s)
 	})
-
-	// Список "своих" ссылок.
 	r.Get("/api/user/urls", func(w http.ResponseWriter, r *http.Request) {
 		GetUserURLs(w, r, s, cfg)
 	})
-
-	// GET /{id}.
 	r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
 		GetFullURL(w, r, s)
 	})
-
-	// Ping.
 	r.Get("/ping", func(w http.ResponseWriter, r *http.Request) {
 		Ping(w, r, s)
 	})
-
-	// Версия.
 	r.Get("/version/", func(w http.ResponseWriter, r *http.Request) {
 		GetVersion(w, r, version)
 	})
-
 	return r
 }
 
-// DeleteUserURLs удаляет ссылки.
+// DeleteUserURLs removes user’s short URLs asynchronously.
 func DeleteUserURLs(w http.ResponseWriter, r *http.Request, s store.Store) {
 	userID, ok := middleware.GetUserID(r)
 	fmt.Printf("[DEBUG DeleteUserURLs] => got userID=%q ok=%v\n", userID, ok)
-
 	if !ok || userID == "" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set(contentType, contentTypeJSON)
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "unauthorized",
-		})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 		return
 	}
-
-	// Считываем массив shortIDs.
 	var toDelete []string
 	if err := json.NewDecoder(r.Body).Decode(&toDelete); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
-
-	// Асинхронно помечаем ссылки удалёнными:.
+	defer func() { _ = r.Body.Close() }()
 	go func() {
 		bg := context.Background()
-		err := s.DeleteBatch(bg, userID, toDelete)
-		if err != nil {
-			middleware.Log.Error().Err(err).Msg("Failed to mark URLs as deleted")
+		if errDel := s.DeleteBatch(bg, userID, toDelete); errDel != nil {
+			middleware.Log.Error().Err(errDel).Msg("Failed to mark URLs as deleted")
 		}
 	}()
 	w.WriteHeader(http.StatusAccepted)
 }
 
+// GetUserURLs lists user’s short URLs.
 func GetUserURLs(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
-
 	userID, ok := middleware.GetUserID(r)
-
 	if !ok || userID == "" {
-		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set(contentType, contentTypeJSON)
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{
-			"error": "unauthorized",
-		})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "unauthorized"})
 		return
 	}
-
 	list, err := s.LoadUserURLs(r.Context(), userID, cfg.BaseURL)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
 	if len(list) == 0 {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-
 	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(http.StatusOK)
-	if err := json.NewEncoder(w).Encode(list); err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+	if encErr := json.NewEncoder(w).Encode(list); encErr != nil {
+		http.Error(w, internalServerError, http.StatusInternalServerError)
 	}
 }
 
-// GetFullURL — проверка удалён/не удалён.
+// GetFullURL redirects to the original URL if it’s not deleted; otherwise returns 410 Gone.
 func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
 	id := chi.URLParam(r, "id")
-
 	longURL, isDeleted, err := s.LoadFull(r.Context(), id)
 	if err != nil {
 		http.Error(w, "Short URL not found", http.StatusNotFound)
@@ -150,7 +122,9 @@ func GetFullURL(w http.ResponseWriter, r *http.Request, s store.Store) {
 	http.Redirect(w, r, longURL.String(), http.StatusTemporaryRedirect)
 }
 
+// ShortenBatch handles bulk shortening requests.
 func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
+	defer func() { _ = r.Body.Close() }()
 	type BatchRequestItem struct {
 		CorrelationID string `json:"correlation_id"`
 		OriginalURL   string `json:"original_url"`
@@ -159,20 +133,16 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		CorrelationID string `json:"correlation_id"`
 		ShortURL      string `json:"short_url"`
 	}
-
 	var reqs []BatchRequestItem
 	if err := json.NewDecoder(r.Body).Decode(&reqs); err != nil {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
-	defer r.Body.Close()
-
 	if len(reqs) == 0 {
 		http.Error(w, "Empty batch", http.StatusBadRequest)
 		return
 	}
-
-	var urls []*url.URL
+	urls := make([]*url.URL, 0, len(reqs))
 	corrMap := make(map[*url.URL]string)
 	for _, rItem := range reqs {
 		parsed, pErr := url.ParseRequestURI(rItem.OriginalURL)
@@ -189,32 +159,30 @@ func ShortenBatch(w http.ResponseWriter, r *http.Request, s store.Store, cfg *co
 		http.Error(w, `{"error":"internal error"}`, http.StatusInternalServerError)
 		return
 	}
-
-	var resp []BatchResponseItem
+	resp := make([]BatchResponseItem, 0, len(shorts))
 	for i, shortU := range shorts {
 		resp = append(resp, BatchResponseItem{
 			CorrelationID: corrMap[urls[i]],
 			ShortURL:      shortU,
 		})
 	}
-
 	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
+// ShortenURL handles the plain-text URL shortening endpoint.
 func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-	defer r.Body.Close()
-
 	longURL := string(body)
 	if longURL == "" {
 		http.Error(w, "Empty body", http.StatusBadRequest)
@@ -225,7 +193,6 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
-
 	userID, _ := middleware.GetUserID(r)
 	res, saveErr := s.Save(r.Context(), userID, parsed, cfg)
 	if saveErr != nil {
@@ -238,19 +205,18 @@ func ShortenURL(w http.ResponseWriter, r *http.Request, s store.Store, cfg *conf
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set(contentType, contentTypeText)
 	w.WriteHeader(http.StatusCreated)
 	_, _ = w.Write([]byte(res))
 }
 
+// ShortenURLJSON handles the JSON-based URL shortening endpoint.
 func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *config.Config) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Only POST method is allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	defer r.Body.Close()
-
+	defer func() { _ = r.Body.Close() }()
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, internalServerError, http.StatusInternalServerError)
@@ -259,7 +225,7 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 	var req struct {
 		URL string `json:"url"`
 	}
-	if err := json.Unmarshal(body, &req); err != nil {
+	if errJSON := json.Unmarshal(body, &req); errJSON != nil {
 		http.Error(w, "Failed to parse JSON", http.StatusBadRequest)
 		return
 	}
@@ -267,13 +233,11 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		http.Error(w, "Empty url field", http.StatusBadRequest)
 		return
 	}
-
 	parsed, pErr := url.ParseRequestURI(req.URL)
 	if pErr != nil || parsed.Scheme == "" || parsed.Host == "" {
 		http.Error(w, "Invalid URL", http.StatusBadRequest)
 		return
 	}
-
 	userID, _ := middleware.GetUserID(r)
 	shortU, saveErr := s.Save(r.Context(), userID, parsed, cfg)
 	if saveErr != nil {
@@ -286,12 +250,12 @@ func ShortenURLJSON(w http.ResponseWriter, r *http.Request, s store.Store, cfg *
 		http.Error(w, internalServerError, http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set(contentType, contentTypeJSON)
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]string{"result": shortU})
 }
 
+// Ping checks database connectivity.
 func Ping(w http.ResponseWriter, r *http.Request, s store.Store) {
 	if err := s.Ping(r.Context()); err != nil {
 		http.Error(w, "DB connection failed", http.StatusInternalServerError)
@@ -300,6 +264,7 @@ func Ping(w http.ResponseWriter, r *http.Request, s store.Store) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// GetVersion prints the server version.
 func GetVersion(w http.ResponseWriter, r *http.Request, version string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Only use GET!", http.StatusMethodNotAllowed)

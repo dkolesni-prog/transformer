@@ -133,3 +133,4 @@ func parseSignedValue(value string) (string, error) {
 	// Пока «пропускаем» реальную проверку.
 	return userID, nil
 }
+

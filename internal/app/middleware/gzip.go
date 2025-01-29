@@ -1,14 +1,20 @@
 // Internal/app/middleware/gzip.go.
-
 package middleware
 
 import (
 	"compress/gzip"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"strings"
+)
+
+const (
+	contentEncodingHeader = "Content-Encoding"
+	acceptEncodingHeader  = "Accept-Encoding"
+	gzipEncoding          = "gzip"
 )
 
 type compressWriter struct {
@@ -22,10 +28,7 @@ func newCompressWriter(w http.ResponseWriter) *compressWriter {
 		Log.Error().Err(err).Msg("Failed to create gzip writer")
 		return nil
 	}
-	return &compressWriter{
-		w:  w,
-		zw: zw,
-	}
+	return &compressWriter{w: w, zw: zw}
 }
 
 func (c *compressWriter) Header() http.Header {
@@ -34,19 +37,19 @@ func (c *compressWriter) Header() http.Header {
 
 func (c *compressWriter) Write(p []byte) (int, error) {
 	n, err := c.zw.Write(p)
-	log.Printf("[compressWriter] wrote %d bytes to gzip (err=%v)\n", n, err)
 	if err != nil {
 		Log.Error().Err(err).Msg("Failed to write to gzip writer")
+		return n, fmt.Errorf("compressWriter write: %w", err)
 	}
-	return n, err
+	log.Printf("[compressWriter] wrote %d bytes to gzip (err=%v)\n", n, err)
+	return n, nil
 }
 
 func (c *compressWriter) WriteHeader(statusCode int) {
-
 	c.w.Header().Del("Content-Length")
-	if statusCode < 300 {
+	if statusCode < http.StatusMultipleChoices {
 		log.Println("Check if entered WriteHeader")
-		c.w.Header().Set("Content-Encoding", "gzip")
+		c.w.Header().Set(contentEncodingHeader, gzipEncoding)
 	}
 	c.w.WriteHeader(statusCode)
 }
@@ -55,7 +58,7 @@ func (c *compressWriter) Close() error {
 	if err := c.zw.Close(); err != nil {
 		Log.Error().Err(err).Msg("Failed to close gzip writer")
 		log.Printf("[compressWriter] Close() returned: %v\n", err)
-		return err
+		return fmt.Errorf("closing gzip writer: %w", err)
 	}
 	log.Printf("[compressWriter] Close() closed ok\n")
 	return nil
@@ -70,18 +73,16 @@ func newCompressReader(r io.ReadCloser) (*compressReader, error) {
 	zr, err := gzip.NewReader(r)
 	if err != nil {
 		Log.Error().Err(err).Msg("Failed to create gzip reader")
-		return nil, err
+		return nil, fmt.Errorf("creating gzip reader: %w", err)
 	}
-	return &compressReader{
-		r:  r,
-		zr: zr,
-	}, nil
+	return &compressReader{r: r, zr: zr}, nil
 }
 
 func (c *compressReader) Read(p []byte) (int, error) {
 	n, err := c.zr.Read(p)
 	if err != nil && !errors.Is(err, io.EOF) {
 		Log.Error().Err(err).Msg("Failed to read from gzip reader")
+		return n, fmt.Errorf("reading gzip data: %w", err)
 	}
 	return n, err
 }
@@ -89,32 +90,31 @@ func (c *compressReader) Read(p []byte) (int, error) {
 func (c *compressReader) Close() error {
 	if err := c.zr.Close(); err != nil {
 		Log.Error().Err(err).Msg("Failed to close gzip reader")
-		return err
+		return fmt.Errorf("closing gzip reader: %w", err)
 	}
 	if err := c.r.Close(); err != nil {
 		log.Println("Failed to close underlying reader", err)
 		Log.Error().Err(err).Msg("Failed to close underlying reader")
-		return err
+		return fmt.Errorf("closing underlying reader: %w", err)
 	}
 	return nil
 }
 
+// GzipMiddleware handles both gzip compression (response) and decompression (request).
 func GzipMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		Log.Info().
-			Str("Accept-Encoding", r.Header.Get("Accept-Encoding")).
-			Str("Content-Encoding", r.Header.Get("Content-Encoding")).
+			Str(acceptEncodingHeader, r.Header.Get(acceptEncodingHeader)).
+			Str(contentEncodingHeader, r.Header.Get(contentEncodingHeader)).
 			Msg("Processing gzip middleware")
 
-		log.Println("accept-encoding", r.Header.Get("Accept-Encoding"))
-		log.Println("content-encoding", r.Header.Get("Content-Encoding"))
-
-		ow := w
-
+		log.Println("accept-encoding", r.Header.Get(acceptEncodingHeader))
+		log.Println("content-encoding", r.Header.Get(contentEncodingHeader))
 		log.Println("endpoint:", r.URL)
 		log.Println("headers:", r.Header)
-		acceptEncoding := r.Header.Get("Accept-Encoding")
-		if strings.Contains(acceptEncoding, "gzip") {
+
+		ow := w
+		if strings.Contains(r.Header.Get(acceptEncodingHeader), gzipEncoding) {
 			log.Println("CHANGING TO COMPRESS WRITER")
 			Log.Info().Msg("Client supports gzip encoding; wrapping response writer")
 			cw := newCompressWriter(w)
@@ -128,13 +128,10 @@ func GzipMiddleware(h http.Handler) http.Handler {
 					Log.Error().Err(err).Msg("Error closing compressWriter")
 				}
 			}()
-			log.Println("Status code was")
 		}
 
-		contentEncoding := r.Header.Get("Content-Encoding")
-		if strings.Contains(contentEncoding, "gzip") {
+		if strings.Contains(r.Header.Get(contentEncodingHeader), gzipEncoding) {
 			Log.Info().Msg("Request body is gzip-encoded; decompressing")
-			log.Println("Before new")
 			cr, err := newCompressReader(r.Body)
 			log.Println("After new:", err)
 			if err != nil {
@@ -148,15 +145,6 @@ func GzipMiddleware(h http.Handler) http.Handler {
 					Log.Error().Err(err).Msg("Error closing compressReader")
 				}
 			}()
-			type statusCapturer interface {
-				Status() int
-			}
-
-			if sc, ok := ow.(statusCapturer); ok {
-				log.Printf("Status code was: %d", sc.Status())
-			} else {
-				log.Println("Status code is unknown (WriteHeader may not have been called yet)")
-			}
 		}
 		h.ServeHTTP(ow, r)
 	})
