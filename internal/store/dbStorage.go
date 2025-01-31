@@ -4,76 +4,91 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/dkolesni-prog/transformer/internal/config"
-	"github.com/dkolesni-prog/transformer/internal/helpers"
 	"net/url"
 	"strings"
+
+	"github.com/dkolesni-prog/transformer/internal/app/middleware"
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/helpers"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
+// RDB is our database wrapper.
 type RDB struct {
 	pool *pgxpool.Pool
 }
 
+// NewRDB initializes a new RDB instance.
 func NewRDB(ctx context.Context, dsn string) (*RDB, error) {
 	cfg, parseErr := pgxpool.ParseConfig(dsn)
 	if parseErr != nil {
-		return nil, fmt.Errorf("parse DSN error: %w", parseErr)
+		middleware.Log.Error().Err(parseErr).Msg("Could not parse DSN")
+		return nil, errors.New("parse DSN error: " + parseErr.Error())
 	}
 
 	pool, poolErr := pgxpool.NewWithConfig(ctx, cfg)
 	if poolErr != nil {
-		return nil, fmt.Errorf("cannot create pgxpool: %w", poolErr)
+		middleware.Log.Error().Err(poolErr).Msg("Could not create pgxpool")
+		return nil, errors.New("cannot create pgxpool: " + poolErr.Error())
 	}
 
 	if pingErr := pool.Ping(ctx); pingErr != nil {
+		middleware.Log.Error().Err(pingErr).Msg("Could not ping database")
+		// Close doesn't return an error, so we just call it
 		pool.Close()
-		return nil, fmt.Errorf("failed ping: %w", pingErr)
+
+		return nil, errors.New("failed ping: " + pingErr.Error())
 	}
 
 	return &RDB{pool: pool}, nil
 }
 
+// Bootstrap creates the table if it doesn't exist.
 func (r *RDB) Bootstrap(ctx context.Context) error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS short_urls (
-    id SERIAL PRIMARY KEY,
-    short_id TEXT UNIQUE NOT NULL,
-    original_url TEXT UNIQUE NOT NULL,
-    user_id TEXT NOT NULL,
+    id INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    short_id VARCHAR(16) UNIQUE NOT NULL,
+    original_url VARCHAR(2048) UNIQUE NOT NULL,
+    user_id VARCHAR(64) NOT NULL,
     is_deleted BOOLEAN NOT NULL DEFAULT false,
     created_at TIMESTAMP NOT NULL DEFAULT NOW(),
     deleted_at TIMESTAMP
 );
 `
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return fmt.Errorf("cannot begin tx: %w", err)
+	tx, beginErr := r.pool.Begin(ctx)
+	if beginErr != nil {
+		middleware.Log.Error().Err(beginErr).Msg("Could not begin transaction in Bootstrap")
+		return errors.New("cannot begin tx: " + beginErr.Error())
 	}
+	// Rollback will be a no-op if Commit succeeds.
 	defer func() {
 		_ = tx.Rollback(ctx)
 	}()
 
 	if _, execErr := tx.Exec(ctx, schema); execErr != nil {
-		return fmt.Errorf("cannot create table: %w", execErr)
+		middleware.Log.Error().Err(execErr).Msg("Could not create table in Bootstrap")
+		return errors.New("cannot create table: " + execErr.Error())
 	}
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		return fmt.Errorf("cannot commit tx: %w", commitErr)
+		middleware.Log.Error().Err(commitErr).Msg("Could not commit transaction in Bootstrap")
+		return errors.New("cannot commit tx: " + commitErr.Error())
 	}
 	return nil
 }
 
+// Save inserts a single URL. Tries maxRetries times to generate a random short_id.
 func (r *RDB) Save(ctx context.Context, userID string, urlToSave *url.URL, cfg *config.Config) (string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
-	for i := 0; i < maxRetries; i++ {
+	for range make([]struct{}, maxRetries) {
 		randomID, genErr := helpers.RandStringRunes(randLen)
 		if genErr != nil {
-			return "", fmt.Errorf("failed to generate random ID: %w", genErr)
+			middleware.Log.Error().Err(genErr).Msg("Could not generate random short_id")
+			return "", errors.New("failed to generate random ID: " + genErr.Error())
 		}
 
 		sqlInsert := `
@@ -83,12 +98,12 @@ ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
 `
 		var shortID string
-		err := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String(), userID).Scan(&shortID)
-		if err == nil {
+		scanErr := r.pool.QueryRow(ctx, sqlInsert, randomID, urlToSave.String(), userID).Scan(&shortID)
+		if scanErr == nil {
 			return ensureSlash(cfg.BaseURL) + shortID, nil
 		}
-		// Если вернулся pgx.ErrNoRows => значит CONFLICT.
-		if errors.Is(err, pgx.ErrNoRows) {
+
+		if errors.Is(scanErr, pgx.ErrNoRows) {
 			var existingID string
 			confSQL := `SELECT short_id FROM short_urls WHERE original_url=$1;`
 			if selErr := r.pool.QueryRow(ctx, confSQL, urlToSave.String()).Scan(&existingID); selErr == nil {
@@ -99,6 +114,7 @@ RETURNING short_id;
 	return "", errors.New("failed to generate a unique short_id after retries")
 }
 
+// LoadFull retrieves the original URL and is_deleted flag by short_id.
 func (r *RDB) LoadFull(ctx context.Context, shortID string) (*url.URL, bool, error) {
 	const sqlSelect = `
 SELECT original_url, is_deleted
@@ -106,115 +122,146 @@ FROM short_urls
 WHERE short_id = $1;
 `
 	var rawURL string
-	var isDel bool
+	var isDeleted bool
 
-	err := r.pool.QueryRow(ctx, sqlSelect, shortID).Scan(&rawURL, &isDel)
-	if errors.Is(err, pgx.ErrNoRows) {
+	scanErr := r.pool.QueryRow(ctx, sqlSelect, shortID).Scan(&rawURL, &isDeleted)
+	if errors.Is(scanErr, pgx.ErrNoRows) {
 		return nil, false, errors.New("not found")
 	}
-	if err != nil {
-		return nil, false, fmt.Errorf("LoadFull query: %w", err)
+	if scanErr != nil {
+		middleware.Log.Error().Err(scanErr).Msg("LoadFull query failed")
+		return nil, false, errors.New("LoadFull query: " + scanErr.Error())
 	}
 
-	parsed, pErr := url.Parse(rawURL)
-	if pErr != nil {
-		return nil, false, fmt.Errorf("bad URL in DB: %w", pErr)
+	parsed, parseErr := url.Parse(rawURL)
+	if parseErr != nil {
+		middleware.Log.Error().Err(parseErr).Msg("Bad URL in DB record")
+		return nil, false, errors.New("bad URL in DB: " + parseErr.Error())
 	}
-	return parsed, isDel, nil
+	return parsed, isDeleted, nil
 }
 
+// SaveBatch inserts a list of URLs using pgx.Batch to minimize round trips.
 func (r *RDB) SaveBatch(ctx context.Context, userID string, urls []*url.URL, cfg *config.Config) ([]string, error) {
 	const maxRetries = 5
 	const randLen = 8
 
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() {
-		_ = tx.Rollback(ctx)
-	}()
+	batch := &pgx.Batch{}
+	genMap := make(map[string]string)
 
-	var results []string
+	// Prepare batch of INSERT statements.
 	for _, u := range urls {
-		var shortID string
 		success := false
-	RETRY_LOOP:
-		for i := 0; i < maxRetries; i++ {
+		for range make([]struct{}, maxRetries) {
 			randVal, genErr := helpers.RandStringRunes(randLen)
 			if genErr != nil {
-				return nil, fmt.Errorf("rand string error: %w", genErr)
+				middleware.Log.Error().Err(genErr).Msg("Could not generate random short_id in SaveBatch")
+				return nil, errors.New("rand string error: " + genErr.Error())
 			}
-			insertSQL := `
+
+			genMap[u.String()] = randVal
+			batch.Queue(`
 INSERT INTO short_urls (short_id, original_url, user_id)
 VALUES ($1, $2, $3)
 ON CONFLICT (original_url) DO NOTHING
 RETURNING short_id;
-`
-			if err := tx.QueryRow(ctx, insertSQL, randVal, u.String(), userID).Scan(&shortID); err == nil {
-				results = append(results, ensureSlash(cfg.BaseURL)+shortID)
-				success = true
-				break RETRY_LOOP
-			}
+`, randVal, u.String(), userID)
+
+			success = true
+			break
 		}
 		if !success {
-			return nil, errors.New("could not save one of the URLs")
+			return nil, errors.New("could not generate a short_id for URL: " + u.String())
 		}
 	}
 
-	if commitErr := tx.Commit(ctx); commitErr != nil {
-		return nil, fmt.Errorf("commit transaction: %w", commitErr)
+	br := r.pool.SendBatch(ctx, batch)
+	defer func() {
+		if closeErr := br.Close(); closeErr != nil {
+			middleware.Log.Error().Err(closeErr).Msg("Could not close batch results in SaveBatch")
+		}
+	}()
+
+	var results []string
+	for _, u := range urls {
+		var returnedID string
+		scanErr := br.QueryRow().Scan(&returnedID)
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			// ON CONFLICT DO NOTHING triggered => find existing short_id
+			confSQL := `SELECT short_id FROM short_urls WHERE original_url = $1;`
+			var existingID string
+			if selErr := r.pool.QueryRow(ctx, confSQL, u.String()).Scan(&existingID); selErr == nil {
+				returnedID = existingID
+			} else {
+				middleware.Log.Error().Err(selErr).Msg("Failed to retrieve existing short_id in SaveBatch")
+				return nil, errors.New("failed to retrieve existing short_id: " + selErr.Error())
+			}
+		} else if scanErr != nil {
+			middleware.Log.Error().Err(scanErr).Msg("Batch execution failed in SaveBatch")
+			return nil, errors.New("batch execution failed: " + scanErr.Error())
+		}
+		results = append(results, ensureSlash(cfg.BaseURL)+returnedID)
 	}
+
 	return results, nil
 }
 
+// LoadUserURLs retrieves all non-deleted URLs for a given user.
 func (r *RDB) LoadUserURLs(ctx context.Context, userID string, baseURL string) ([]UserURL, error) {
 	const sqlSelect = `
 SELECT short_id, original_url
 FROM short_urls
-WHERE user_id = $1 AND is_deleted=false;
+WHERE user_id = $1
+  AND is_deleted = false;
 `
-	rows, err := r.pool.Query(ctx, sqlSelect, userID)
-	if err != nil {
-		return nil, fmt.Errorf("LoadUserURLs: %w", err)
+	rows, queryErr := r.pool.Query(ctx, sqlSelect, userID)
+	if queryErr != nil {
+		middleware.Log.Error().Err(queryErr).Msg("LoadUserURLs query failed")
+		return nil, errors.New("LoadUserURLs: " + queryErr.Error())
 	}
 	defer rows.Close()
 
 	var out []UserURL
 	for rows.Next() {
 		var sid, orig string
-		if err := rows.Scan(&sid, &orig); err != nil {
-			return nil, fmt.Errorf("rows.Scan: %w", err)
+		scanErr := rows.Scan(&sid, &orig)
+		if scanErr != nil {
+			middleware.Log.Error().Err(scanErr).Msg("Rows scan failed in LoadUserURLs")
+			return nil, errors.New("rows.Scan: " + scanErr.Error())
 		}
 		out = append(out, UserURL{
 			ShortURL:    ensureSlash(baseURL) + sid,
 			OriginalURL: orig,
 		})
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows.Err: %w", err)
+	if rowsErr := rows.Err(); rowsErr != nil {
+		middleware.Log.Error().Err(rowsErr).Msg("Rows iteration error in LoadUserURLs")
+		return nil, errors.New("rows.Err: " + rowsErr.Error())
 	}
 	return out, nil
 }
 
-// DeleteBatch — ставим is_deleted=true для нескольких shortID пользователя userID.
+// DeleteBatch sets is_deleted = true for multiple shortIDs belonging to a single userID.
 func (r *RDB) DeleteBatch(ctx context.Context, userID string, shortIDs []string) error {
 	const sqlUpdate = `
 UPDATE short_urls
-SET is_deleted=true, deleted_at=now()
+SET is_deleted = true,
+    deleted_at = now()
 WHERE user_id = $1
   AND short_id = ANY($2);
 `
-	_, err := r.pool.Exec(ctx, sqlUpdate, userID, shortIDs)
-	if err != nil {
-		return fmt.Errorf("DeleteBatch: %w", err)
+	if _, execErr := r.pool.Exec(ctx, sqlUpdate, userID, shortIDs); execErr != nil {
+		middleware.Log.Error().Err(execErr).Msg("DeleteBatch update failed")
+		return errors.New("DeleteBatch: " + execErr.Error())
 	}
 	return nil
 }
 
 func (r *RDB) Ping(ctx context.Context) error {
-	if err := r.pool.Ping(ctx); err != nil {
-		return fmt.Errorf("ping error: %w", err)
+	pingErr := r.pool.Ping(ctx)
+	if pingErr != nil {
+		middleware.Log.Error().Err(pingErr).Msg("Ping to database failed")
+		return errors.New("ping error: " + pingErr.Error())
 	}
 	return nil
 }
