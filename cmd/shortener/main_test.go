@@ -1,33 +1,38 @@
+// Cmd/shortener/main_test.go.
 package main
 
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
 	"strings"
 	"testing"
 
-	"github.com/dkolesni-prog/transformer/internal/app"
 	"github.com/go-chi/chi/v5"
+	"github.com/go-resty/resty/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/dkolesni-prog/transformer/internal/app/endpoints"
+	"github.com/dkolesni-prog/transformer/internal/config"
+	"github.com/dkolesni-prog/transformer/internal/store"
 )
 
 // TestEndpoints tests the main endpoints of the URL shortening service.
 func TestEndpoints(t *testing.T) {
-	// Update with a valid file path for the test
-	storageFilePath := "test_storage.json"
-	cfg := app.NewConfig()
-	storage := app.NewStorage(storageFilePath)
+	cfg := config.NewConfig()
+	storage := store.NewStorage(cfg)
 
 	tests := []struct {
 		name       string
 		method     string
 		url        string
 		body       string
-		setup      func(*app.Storage)
+		setup      func(*store.Storage)
 		wantCode   int
 		wantBody   string
 		wantHeader map[string]string
@@ -37,7 +42,7 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodPost,
 			url:      "/",
 			body:     "https://example.com",
-			setup:    func(s *app.Storage) {},
+			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusCreated,
 			wantBody: cfg.BaseURL,
 			wantHeader: map[string]string{
@@ -45,11 +50,26 @@ func TestEndpoints(t *testing.T) {
 			},
 		},
 		{
+			name:   "POST batch of URLs",
+			method: http.MethodPost,
+			url:    "/api/shorten/batch",
+			body: `[
+				{"correlation_id":"1", "original_url":"https://example1.com"},
+				{"correlation_id":"2", "original_url":"https://example2.com"}
+			]`,
+			setup:    func(s *store.Storage) {},
+			wantCode: http.StatusCreated,
+			wantBody: `[{"correlation_id":"1", "short_url":"`,
+			wantHeader: map[string]string{
+				"Content-Type": "application/json; charset=utf-8",
+			},
+		},
+		{
 			name:   "GET valid short URL",
 			method: http.MethodGet,
 			url:    "/abcd1234",
 			body:   "",
-			setup: func(s *app.Storage) {
+			setup: func(s *store.Storage) {
 				s.SetIfAbsent("abcd1234", "https://example.com")
 			},
 			wantCode: http.StatusTemporaryRedirect,
@@ -63,18 +83,16 @@ func TestEndpoints(t *testing.T) {
 			method:   http.MethodGet,
 			url:      "/nonexistent",
 			body:     "",
-			setup:    func(s *app.Storage) {},
+			setup:    func(s *store.Storage) {},
 			wantCode: http.StatusNotFound,
 			wantBody: "Short URL not found\n",
 		},
 	}
-
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(storage)
 			}
-
 			var req *http.Request
 			if tt.body != "" {
 				req = httptest.NewRequest(tt.method, tt.url, strings.NewReader(tt.body))
@@ -82,25 +100,30 @@ func TestEndpoints(t *testing.T) {
 				req = httptest.NewRequest(tt.method, tt.url, http.NoBody)
 			}
 			rec := httptest.NewRecorder()
-
 			r := chi.NewRouter()
 			r.Post("/", func(w http.ResponseWriter, r *http.Request) {
-				app.ShortenURL(w, r, storage, cfg.BaseURL)
+				endpoints.ShortenURL(w, r, storage, cfg)
 			})
 			r.Get("/{id}", func(w http.ResponseWriter, r *http.Request) {
-				app.GetFullURL(w, r, storage)
+				endpoints.GetFullURL(w, r, storage)
 			})
-
+			r.Post("/api/shorten/batch", func(w http.ResponseWriter, r *http.Request) {
+				endpoints.ShortenBatch(w, r, storage, cfg)
+			})
 			r.ServeHTTP(rec, req)
-
 			if rec.Code != tt.wantCode {
 				t.Errorf("got status code %d, want %d", rec.Code, tt.wantCode)
 			}
-
-			if tt.wantBody != "" && !strings.HasPrefix(rec.Body.String(), tt.wantBody) {
+			if tt.method == http.MethodPost && strings.Contains(tt.url, "/batch") {
+				var results []map[string]string
+				err := json.Unmarshal(rec.Body.Bytes(), &results)
+				require.NoError(t, err, "Failed to unmarshal batch response")
+				for _, result := range results {
+					assert.Contains(t, result["short_url"], cfg.BaseURL, "Short URL should start with base URL")
+				}
+			} else if tt.wantBody != "" && !strings.HasPrefix(rec.Body.String(), tt.wantBody) {
 				t.Errorf("got body %q, want prefix %q", rec.Body.String(), tt.wantBody)
 			}
-
 			for key, wantValue := range tt.wantHeader {
 				gotValue := rec.Header().Get(key)
 				if gotValue != wantValue {
@@ -111,83 +134,78 @@ func TestEndpoints(t *testing.T) {
 	}
 }
 
-// TestGzipHandling checks gzip request/response support and content-type handling.
 func TestGzipHandling(t *testing.T) {
-	router := http.NewServeMux()
-	router.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		defer r.Body.Close()
-
-		if strings.Contains(string(body), "json") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, err := w.Write([]byte(`{"message": "JSON response"}`))
-			if err != nil {
-				return
-			}
-		} else if strings.Contains(string(body), "html") {
-			w.Header().Set("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			_, err := w.Write([]byte("<html><body>HTML response</body></html>"))
-			if err != nil {
-				return
-			}
-		} else {
-			http.Error(w, "Unsupported content", http.StatusBadRequest)
-		}
-	})
-
-	ts := httptest.NewServer(app.GzipMiddleware(router))
+	cfg := config.NewConfig()
+	storeNotImported := store.NewMemoryStorage()
+	router := endpoints.NewRouter(cfg, storeNotImported, "testversion")
+	ts := httptest.NewServer(router)
 	defer ts.Close()
 
-	t.Run("Accept gzip-encoded request", func(t *testing.T) {
-		body := `{"content":"json"}`
+	t.Run("GzippedRequest_PlainResponse", func(t *testing.T) {
+		httpClient := &http.Client{
+			Transport: &http.Transport{
+				DisableCompression: true,
+			},
+		}
+		client := resty.NewWithClient(httpClient).
+			SetBaseURL(ts.URL).
+			SetRedirectPolicy(resty.NoRedirectPolicy()).
+			SetDoNotParseResponse(true)
+
+		body := `{"url":"https://example.com"}`
 		var gzippedBody bytes.Buffer
 		gz := gzip.NewWriter(&gzippedBody)
 		_, err := gz.Write([]byte(body))
-		require.NoError(t, err)
-		require.NoError(t, gz.Close())
+		require.NoError(t, err, "Failed to write to gzip writer")
+		require.NoError(t, gz.Close(), "Failed to close gzip writer")
 
-		req, _ := http.NewRequest("POST", ts.URL, &gzippedBody)
-		req.Header.Set("Content-Encoding", "gzip")
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		resp, err := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Accept-Encoding", "").
+			SetHeader("Content-Encoding", "gzip").
+			SetBody(gzippedBody.Bytes()).
+			Post("/api/shorten")
+		require.NoError(t, err, "Request failed")
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
+		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
+		rawBody, err := io.ReadAll(resp.RawResponse.Body)
+		require.NoError(t, err, "Failed to read raw response body")
+		require.False(t, isGzipData(rawBody), "Expected plain JSON")
+		var respData map[string]string
+		err = json.Unmarshal(rawBody, &respData)
+		require.NoError(t, err, "Failed to parse plain JSON response")
+		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
 
-	t.Run("Serve gzip-encoded response", func(t *testing.T) {
-		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"html"}`))
-		req.Header.Set("Content-Type", "text/html")
-		req.Header.Set("Accept-Encoding", "gzip")
-
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusOK, resp.StatusCode)
-		assert.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
-
-		gzr, err := gzip.NewReader(resp.Body)
-		require.NoError(t, err)
-		defer gzr.Close()
-
-		body, err := io.ReadAll(gzr)
-		require.NoError(t, err)
-		assert.Equal(t, "<html><body>HTML response</body></html>", string(body))
+	t.Run("PlainRequest_GzippedResponse", func(t *testing.T) {
+		client := resty.New().
+			SetBaseURL(ts.URL).
+			SetRedirectPolicy(resty.NoRedirectPolicy())
+		body := `{"url":"https://example.com"}`
+		resp, err := client.R().
+			SetHeader("Content-Type", "application/json").
+			SetHeader("Accept-Encoding", "gzip").
+			SetDoNotParseResponse(true).
+			SetBody([]byte(body)).
+			Post("/api/shorten")
+		require.NoError(t, err, "Request failed")
+		dump, _ := httputil.DumpResponse(resp.RawResponse, false)
+		t.Logf("[DEBUG] Raw HTTP response:\n%s", dump)
+		require.Equal(t, http.StatusCreated, resp.StatusCode())
+		require.Equal(t, "gzip", resp.Header().Get("Content-Encoding"), "Expected gzipped response")
+		rawBytes, err := io.ReadAll(resp.RawResponse.Body)
+		require.NoError(t, err, "Failed to read raw body")
+		gzr, err := gzip.NewReader(bytes.NewReader(rawBytes))
+		require.NoError(t, err, "Failed to create gzip reader")
+		decompressedBody, err := io.ReadAll(gzr)
+		require.NoError(t, err, "Failed to decompress gzip response")
+		var respData map[string]string
+		err = json.Unmarshal(decompressedBody, &respData)
+		require.NoError(t, err, "Failed to unmarshal response JSON")
+		require.Contains(t, respData["result"], cfg.BaseURL)
 	})
+}
 
-	t.Run("Unsupported content type", func(t *testing.T) {
-		req, _ := http.NewRequest("POST", ts.URL, strings.NewReader(`{"content":"unknown"}`))
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
-		defer resp.Body.Close()
-
-		assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-	})
+func isGzipData(data []byte) bool {
+	return len(data) >= 2 && data[0] == 0x1F && data[1] == 0x8B
 }
